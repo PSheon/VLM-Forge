@@ -210,8 +210,16 @@ export const emptyLabel = (skill: Skill): Pred => (skill === "detect" ? { boxes:
 export function summary(p: Pred | null | undefined): string {
   if (!p) return "—";
   if (p.boxes) return `${p.boxes.length} 框`;
+  if (p.text !== undefined) { const t = answerText(p); return t ? `"${t.slice(0, 60)}${t.length > 60 ? "…" : ""}"` : "(空)"; }
   if (p.points) return `${p.points.length} 點`;
-  return p.text ? `"${p.text.slice(0, 60)}${p.text.length > 60 ? "…" : ""}"` : "(空)";
+  return "(空)";
+}
+/** A text answer as shown: Moondream 3 sometimes answers by pointing ("There is " + a
+ *  grounded point), so the points it grounded are appended as ⟨N 個點⟩. */
+export function answerText(p: Pred | null | undefined): string {
+  const t = (p?.text ?? "").trim();
+  const n = p?.text !== undefined ? p?.points?.length ?? 0 : 0;
+  return n ? `${t}⟨${n} 個點⟩` : t;
 }
 export function judgeText(v: JudgeVerdict | null | undefined): string {
   if (!v) return "";

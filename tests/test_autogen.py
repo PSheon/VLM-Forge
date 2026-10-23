@@ -79,3 +79,30 @@ def test_auto_label_prefers_teacher_text_and_student_geometry():
     assert auto_label("detect", None, {"boxes": [[0, 0, 0.9, 0.9]]}) == {
         "boxes": [[0, 0, 0.9, 0.9]]
     }
+
+
+def test_grounded_count_answer():
+    """MD3 answers "How many forklifts?" with "There is <ground> x y <eos>": the text alone is
+    "There is ", the grounded point is the count (seen on 4 of 1 313 warehouse questions)."""
+    from vlmforge.model.moondream import COORD_ID, EOS, Generation, grounded_answer
+
+    g = Generation(
+        tokens=[2272, 41649, 7, COORD_ID, COORD_ID, EOS],
+        values=[(0, 0), (0, 0), (0, 0), (0.41, 0), (0.62, 0), (0, 0)],
+    )
+    a = grounded_answer(
+        g,
+        lambda ids: (
+            {2272: "There", 41649: " is ", 7: ""}.get(ids[0], "") if len(ids) == 1 else "There is "
+        ),
+    )
+    assert a == {"text": "There is ", "points": [[0.41, 0.62]]}
+    one = agree("query", {"text": a["text"], "points": a["points"]}, {"text": "1"})
+    assert one["verdict"] == "accept" and "指了 1 個點" in one["note"]
+    assert agree("query", {"text": "There is "}, {"text": "1"})["verdict"] == "fix"
+    assert (
+        agree("query", {"text": "There are 2 forklifts.", "points": [[0.1, 0.1]]}, {"text": "2"})[
+            "verdict"
+        ]
+        == "accept"
+    )

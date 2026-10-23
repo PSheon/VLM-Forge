@@ -237,16 +237,21 @@ def agree(skill: str, pred: dict | None, teacher: dict) -> dict:
     if skill == "query":
         s, t = str(pred.get("text", "")), str(teacher.get("text", ""))
         tn = number(t)
+        pts = pred.get("points") or []  # the model answered by pointing (query_grounded)
+        sn = number(s)
+        if sn is None and pts:
+            sn = len(pts)
         if _norm(t).isdigit() or (tn is not None and len(_norm(t).split()) <= 2):
-            ok = number(s) == tn
+            ok = sn == tn
         elif _norm(t) in ("yes", "no"):
             first = re.findall(r"[a-z]+", s.lower())[:1]
             ok = first == [_norm(t)]
         else:
             ok = _norm(s) == _norm(t) or (_norm(t) in _norm(s) and len(_norm(t)) >= 3)
+        shown = s[:60].strip() + (f"⟨指了 {len(pts)} 個點⟩" if pts else "")
         return {
             "verdict": "accept" if ok else "fix",
-            "note": f"模型「{s[:60]}」vs 預標「{t[:60]}」",
+            "note": f"模型「{shown}」vs 預標「{t[:60]}」",
             "answer": t,
             "model": "agreement",
         }

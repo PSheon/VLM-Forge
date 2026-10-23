@@ -327,9 +327,19 @@ class Moondream:
         return [self._text(g) for g in gens]
 
     def query(self, images, questions, max_tokens: int = DEFAULT_MAX_TOKENS) -> list[str]:
+        """Plain text answers, exactly as the engine decodes them (held-out scoring uses this)."""
         qs = self._per_image(questions, len(images))
         gens = self._run(images, "query", [{"question": q} for q in qs], max_tokens)
         return [self._text(g) for g in gens]
+
+    def query_grounded(self, images, questions, max_tokens: int = DEFAULT_MAX_TOKENS) -> list[dict]:
+        """``{"text", "points"}`` per image. Moondream 3 sometimes answers by pointing: "How many
+        forklifts?" -> ``There is <start_ground> <coord x> <coord y> <eos>``, which decodes to
+        the bare text "There is ". The engine does the same (MD3 suppresses nothing in direct
+        answers); the points are kept here so a count can be read from them."""
+        qs = self._per_image(questions, len(images))
+        gens = self._run(images, "query", [{"question": q} for q in qs], max_tokens)
+        return [grounded_answer(g, self.tokenizer.decode) for g in gens]
 
     def detect(self, images, objects, max_objects: int = DEFAULT_MAX_OBJECTS) -> list[list[dict]]:
         objs = self._per_image(objects, len(images))
@@ -365,6 +375,16 @@ def boxes_from(g: Generation) -> list[dict]:
             )
             px = py = None
     return out
+
+
+def grounded_answer(g: Generation, decode) -> dict:
+    """A free-text stream -> its text (coord / size tokens left out, the grounding markers
+    decode to nothing) and the points it grounded, as ``[[x, y], ...]`` in 0-1."""
+    ids = [t for t in g.tokens if t not in (COORD_ID, SIZE_ID)]
+    if ids and ids[-1] == EOS:
+        ids = ids[:-1]
+    pts = [[round(p["x"], 4), round(p["y"], 4)] for p in points_from(g)]
+    return {"text": decode(ids), "points": pts}
 
 
 def points_from(g: Generation) -> list[dict]:
