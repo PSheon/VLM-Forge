@@ -225,10 +225,20 @@ class DatasetStore:
             " and items.status in ('auto', 'approved', 'corrected')",
             (ds_id,),
         ).fetchone()[0]
+        ts = self.db.execute(
+            "select items.skill, count(*) n from items"
+            " join queues on queues.id = items.queue_id"
+            " join dataset_images di on di.image_id = items.image_id"
+            " and di.dataset_id = queues.dataset_id"
+            " where queues.dataset_id = ? and di.split = 'train'"
+            " and items.status in ('auto', 'approved', 'corrected') group by items.skill",
+            (ds_id,),
+        ).fetchall()
         out = {"images": r["images"] or 0, "val_images": r["val"] or 0}
         out.update({k: (c[k] or 0) for k in c.keys()})
         out["trainable"] = out["auto"] + out["reviewed"]
         out["trainable_images"] = ti or 0  # train-split images with ≥1 confirmed item
+        out["trainable_by_skill"] = {row["skill"]: row["n"] for row in ts}
         return out
 
     def rows(self, ds_id: int, split: str) -> list[dict]:

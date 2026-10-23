@@ -24,7 +24,8 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   const chosen = datasets.filter((d) => picked.includes(d.id));
   const rows = chosen.reduce((a, d) => a + d.trainable, 0);
   const images = chosen.reduce((a, d) => a + (d.trainable_images ?? 0), 0);
-  const bySkill = { detect: chosen.reduce((a, d) => a + d.detect, 0), point: chosen.reduce((a, d) => a + d.point, 0), query: chosen.reduce((a, d) => a + d.query, 0), caption: chosen.reduce((a, d) => a + d.caption, 0) };
+  const n = (k: "detect" | "point" | "query" | "caption") => chosen.reduce((a, d) => a + (d.trainable_by_skill?.[k] ?? 0), 0);
+  const bySkill = { detect: n("detect"), point: n("point"), query: n("query"), caption: n("caption") }; // confirmed, train split only
   const autoSteps = Math.max(100, Math.min(1000, images * 2));
   const running = runs.find((r) => r.state === "running");
   const e = status?.engine;
@@ -112,7 +113,7 @@ export function RunCard({ r, go }: { r: Run; go: (s: Step) => void }) {
             </div>
           )}
           {Object.entries(r.evals).filter(([k]) => k.startsWith("val-")).map(([k, m]) => <div key={k} className="muted">{suiteLabel(k)}：{Object.entries(m).map(([s, v]) => `${s} ${fmt(v)}`).join(" · ")}</div>)}
-          {r.gate && <div className={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "比 base 好（過關）" : "沒有比 base 好"}。規則：目標 skill ≥ base，其他 ≥ base − 1.0 點</div>}
+          {r.gate && <div className={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "比 base 好（過關）" : "沒有比 base 好"}。規則（工廠 CCTV 考卷）：每個 skill ≥ base − 1.0 點，且至少一個進步</div>}
           {r.state === "done" && <button className="primary" onClick={() => go("test")} style={{ alignSelf: "flex-start" }}>去測試看差異 →</button>}
         </div>
       </div>
@@ -121,7 +122,7 @@ export function RunCard({ r, go }: { r: Run; go: (s: Step) => void }) {
 }
 
 function Curve({ r }: { r: Run }) {
-  const tr = r.curve.filter((p) => p.loss !== undefined), va = r.curve.filter((p) => p.val !== undefined);
+  const tr = r.curve.filter((p) => p.loss != null), va = r.curve.filter((p) => p.val != null);
   if (!tr.length && !va.length) return <div className="muted hint">還沒有 log</div>;
   const W = 460, H = 150, pad = 30;
   const maxX = Math.max(1, r.steps, ...r.curve.map((p) => p.step));

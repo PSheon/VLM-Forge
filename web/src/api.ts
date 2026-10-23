@@ -90,6 +90,7 @@ export interface Dataset {
   caption: number;
   trainable: number;
   trainable_images: number; // train-split images with at least one confirmed question
+  trainable_by_skill?: Partial<Record<Skill, number>>;
   batches?: Batch[];
   unlabelled?: number;
 }

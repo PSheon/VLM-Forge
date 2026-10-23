@@ -285,7 +285,9 @@ class Pipeline:
                         k.split("/")[0]: v for k, v in m.items() if k.endswith("/macro")
                     }
                     self._write(name, st)
-            held = [s for s in st["evals"] if s in paths.HELDOUT_SUITES]
+            # the gate is the v1 criterion (GOALS §1): the target suite only; the other
+            # held-out suites are shown as references, not averaged in
+            held = [s for s in st["evals"] if s == paths.HELDOUT_SUITES[0]]
             base_reports = [paths.BASELINES / f"base-{s}.json" for s in held]
             base_reports = [p for p in base_reports if p.exists()]
             if base_reports:

@@ -46,7 +46,7 @@ Data Core 匯出包、GCS、CI、`stage` 分支與 gate 儀式、PRO 6000 kestre
 ## 6. 訓練
 
 - UI 一顆按鈕；只露名稱、步數、學習率。預設 r=16、alpha=32、lr 2e-4、步數依資料量（≈ 每張圖 2 步，100–1000）、batch 8、replay 0.5、region head 關。預設值由 Claude 依實驗調整，不逐項問。
-- 訓完自動在 held-out 與驗證集評估、和 base 比；一次只跑一個訓練。
+- 訓完自動在 held-out 與驗證集評估、和 base 比；過關＝**工廠 CCTV 考卷**每個 skill ≥ base − 1 點且至少一個進步（CrowdHuman／機器狗只當參考，不算進去）；一次只跑一個訓練。
 
 ## 7. 測試
 
@@ -68,7 +68,8 @@ Data Core 匯出包、GCS、CI、`stage` 分支與 gate 儀式、PRO 6000 kestre
 
 ## 10. 現況（2026-10-23）
 
-- 已有：模型移植與 base 分數；自動出題（兩階段 teacher、批次）；一次一題的檢查頁；UI 訓練管線（訓→評→比）；④ 分數表／看差異／單張試玩；圖池 hydranet 300、LOCO 200（Data Core T1）。
+- **2026-10-23 晚：①→③ 全程在 UI 跑通**——工廠-測試 120 張 → 2845 題（8B 出題）→ 檢查 → 訓練 ft-1023-1911 → 分數／看差異／試一張／Orin 包。2 張圖的 run 只證明流程，分數退步是預期。
+- 已有：模型移植與 base 分數；自動出題（兩階段 teacher、批次、8B 備案）；一次一題的檢查頁；訓練管線（訓→評→gate）；③ 分數卡／看差異／試一張／Orin 包（附本機 adapter loader）。
 - 標註批次的進度只在記憶體：server 重啟或取消會中斷，但出好的題都在；資料集頁會標「中斷」並給「接著跑」（只補沒出題的圖、沒作答的題、沒比對的題）。**跑標註時不要重啟 server。**
-- 進行中：依本文件改成「資料集」為中心的介面（先出稿）；Photon 相容的 adapter 預設；驗證集切分；Orin 匯出。
+- 下一步：Paul 看完 30–50 張再訓一次，看 CCTV query／detect 是否守住；query 答案被截斷（「There is 」）待查；Orin 實機驗證 `local_adapter.py`。
 - 待 Paul：NVR RTSP 連線資訊（工廠 CCTV 新畫面）。
