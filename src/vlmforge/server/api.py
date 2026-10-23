@@ -24,7 +24,7 @@ from ..orin import make_bundle
 from .datasets import DatasetStore
 from .export import export_incoming, export_train
 from .pipeline import DEFAULT_LR, DEFAULT_STEPS, Pipeline, default_name
-from .workspace import IMAGE_EXT, SKILLS, Workspace
+from .workspace import ALL, IMAGE_EXT, SKILLS, Workspace
 
 GEN_BATCH = 8  # images per teacher call (GPU throughput; the 32B judge is the slow part)
 
@@ -252,7 +252,8 @@ def _with_backoff(fn, paths_: list[str]):
 
 def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     app = FastAPI(title="VLM-Forge", version=__version__)
-    jobs: dict[int, dict] = {}
+    jobs: dict[int, dict] = {}  # in memory: a restart loses them (hence /resume)
+    app.state.jobs = jobs
 
     # ------------------------------------------------------------------ status
     @app.get("/api/status")
@@ -406,7 +407,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     def _predict_queue(qid: int, model: str, judge: bool):
         job = jobs[qid]
         try:
-            items = ws.items(qid, "pending")
+            items = ws.items(qid, "pending", ALL)
             by_prompt: dict[tuple[str, str], list[dict]] = {}
             for it in items:
                 if it["pred"] is None:
@@ -427,6 +428,18 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             job["state"] = "error"
             job["error"] = f"{type(e).__name__}: {e}"
 
+    def _batch(q: dict) -> dict:
+        """A queue row for the UI: its in-memory job, and for autogen batches what is still
+        unfinished (so an interrupted batch shows 「接著跑」 instead of looking done)."""
+        out = {**q, "job": jobs.get(q["id"])}
+        if q.get("mode") == "auto" and q.get("config"):
+            try:
+                out["unfinished"] = ws.unfinished(q["id"], json.loads(q["config"])["image_ids"])
+            except (KeyError, ValueError, TypeError):
+                pass
+        out.pop("config", None)
+        return out
+
     def _start(qid: int, target, *args):
         jobs[qid] = {"state": "running", "phase": "", "done": 0, "total": 0, "error": None}
         threading.Thread(target=target, args=(qid, *args), daemon=True).start()
@@ -439,6 +452,25 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             raise HTTPException(409, "not running")
         job["cancel"] = True
         return job
+
+    @app.post("/api/queues/{qid}/resume")
+    def resume_queue(qid: int):
+        """Pick an autogen batch up where it stopped (server restart, cancel, error):
+        unasked images, unanswered items, uncompared items, then triage."""
+        try:
+            q = ws.queue(qid)
+        except KeyError as e:
+            raise HTTPException(404) from e
+        if q.get("mode") != "auto" or not q.get("config"):
+            raise HTTPException(422, "只有自動標註的批次能接著跑")
+        if jobs.get(qid, {}).get("state") == "running":
+            raise HTTPException(409, "還在跑")
+        cfg = json.loads(q["config"])
+        if not any(ws.unfinished(qid, cfg["image_ids"]).values()):
+            raise HTTPException(409, "這批已經完成，沒有要接的")
+        _start(qid, _autogen_queue, cfg, True)
+        jobs[qid]["resumed"] = True  # before the thread gets there, so the reply says so
+        return _batch(q)
 
     @app.post("/api/queues/{qid}/judge")
     def judge_queue(qid: int):
@@ -479,9 +511,10 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         _start(q["id"], _predict_queue, body.model, body.judge)
         return {**ws.queue(q["id"]), "job": jobs[q["id"]]}
 
-    def _autogen_queue(qid: int, cfg: dict):
+    def _autogen_queue(qid: int, cfg: dict, resume: bool = False):
         """generating (teacher) -> predicting (student) -> judging (agreement; judge for
-        captions) -> triage by image."""
+        captions) -> triage by image. Every phase only does what is still missing, so the
+        same function resumes a batch that a restart or a cancel interrupted."""
         from ..autogen import agree, items_from_teacher
 
         job = jobs[qid]
@@ -490,6 +523,10 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
 
             skills = set(cfg["skills"])
             images = cfg["image_ids"]
+            if resume:
+                have = {it["image_id"] for it in ws.items(qid, None, ALL)}
+                images = [i for i in images if i not in have]
+                job["resumed"] = True
             mode = cfg.get("mode", "auto")  # auto | fixed | both
             fixed = parse_fixed(cfg.get("fixed", "")) if mode in ("fixed", "both") else None
             job["phase"], job["total"], job["done"] = "generating", len(images), 0
@@ -535,8 +572,8 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             if job.get("cancel"):
                 job["state"] = "cancelled"
                 return
-            # student
-            items = ws.items(qid, "pending")
+            # student (only items without an answer: a resumed batch keeps what it had)
+            items = [it for it in ws.items(qid, "pending", ALL) if it["pred"] is None]
             by_prompt: dict[tuple[str, str], list[dict]] = {}
             for it in items:
                 by_prompt.setdefault((it["skill"], it["prompt"]), []).append(it)
@@ -553,8 +590,8 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                         job["done"] += len(chunk)
             except Exception as e:  # noqa: BLE001 - no student (weights missing): humans
                 job["student_error"] = f"{type(e).__name__}: {e}"  # review the teacher alone
-            # agreement, and the judge for the teacher's captions
-            items = ws.items(qid, "pending")
+            # agreement, and the judge for the teacher's captions (unjudged items only)
+            items = [it for it in ws.items(qid, "pending", ALL) if not it["verdict"]]
             caps = [it for it in items if it["skill"] == "caption"]
             job["phase"], job["total"], job["done"] = "judging", len(items), 0
             for it in items:
@@ -670,7 +707,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     def review_summary():
         return {
             **ws.review_summary(),
-            "batches": [{**q, "job": jobs.get(q["id"])} for q in ws.queues()],
+            "batches": [_batch(q) for q in ws.queues()],
             "sources": ws.sources(),
         }
 
@@ -746,9 +783,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             d = store.get(ds_id)
         except KeyError as e:
             raise HTTPException(404) from e
-        d["batches"] = [
-            {**q, "job": jobs.get(q["id"])} for q in ws.queues() if q.get("dataset_id") == ds_id
-        ]
+        d["batches"] = [_batch(q) for q in ws.queues() if q.get("dataset_id") == ds_id]
         d["unlabelled"] = len(store.unlabelled_image_ids(ds_id))
         return d
 
@@ -940,12 +975,12 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
 
     @app.get("/api/queues")
     def queues():
-        return [{**q, "job": jobs.get(q["id"])} for q in ws.queues()]
+        return [_batch(q) for q in ws.queues()]
 
     @app.get("/api/queues/{qid}")
     def queue(qid: int):
         try:
-            return {**ws.queue(qid), "job": jobs.get(qid)}
+            return _batch(ws.queue(qid))
         except KeyError as e:
             raise HTTPException(404) from e
 

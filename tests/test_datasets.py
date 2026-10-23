@@ -172,6 +172,28 @@ def test_dataset_flow(client, monkeypatch):
     assert d["items"] == 24 and d["unlabelled"] == 0 and d["detect"] == 8 and d["query"] == 8
     assert d["trainable"] == 24  # everything agreed with the stub student
     assert client.post(f"/api/datasets/{ds['id']}/label").status_code == 409
+    # a server restart loses the job: wipe answers + verdicts of half the items and the
+    # in-memory job, then "接著跑" must redo exactly that and end with nothing unfinished
+    from vlmforge.server.workspace import ALL
+
+    for it in client.ws.items(q["id"], None, ALL)[:12]:
+        client.ws.set_pred(it["id"], None, None)
+        client.ws.db.execute(
+            "update items set judge = null, verdict = null, status = 'pending' where id = ?",
+            (it["id"],),
+        )
+    client.ws.db.commit()
+    client.app.state.jobs.pop(q["id"], None)
+    b = client.get(f"/api/queues/{q['id']}").json()
+    assert b["job"] is None and b["unfinished"]["unpredicted"] == 12
+    r = client.post(f"/api/queues/{q['id']}/resume").json()
+    assert r["job"]["state"] == "running" and r["job"]["resumed"] is True
+    r = wait(client, q["id"])
+    assert r["job"]["state"] == "done"
+    assert r["unfinished"] == {"images": 0, "unpredicted": 0, "unjudged": 0}
+    assert client.post(f"/api/queues/{q['id']}/resume").status_code == 409
+    d = client.get(f"/api/datasets/{ds['id']}").json()
+    assert d["trainable"] == 24
     # rows per split and export
     train_rows = client.ws and __import__(
         "vlmforge.server.datasets", fromlist=["DatasetStore"]

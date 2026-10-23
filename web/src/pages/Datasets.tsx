@@ -34,10 +34,17 @@ export default function Datasets({ status, refresh, go, reviewer, setGuard }: { 
   );
 }
 
+/** An autogen batch whose job is gone (server restart) or stopped, with work left. */
+function interrupted(b?: Batch): boolean {
+  const u = b?.unfinished;
+  return !!u && b?.job?.state !== "running" && u.images + u.unpredicted + u.unjudged > 0;
+}
+
 function statusPill(d: Dataset): [string, "ok" | "bad" | "warn" | "grey"] {
   const b = d.batches?.[0];
   if (b?.job?.state === "running") return [`標註中 ${b.job.done}/${b.job.total}`, "warn"];
   if (b?.job?.state === "error") return ["上次標註失敗", "bad"];
+  if (interrupted(b)) return ["標註中斷，可接著跑", "bad"];
   if (d.images_pending > 0) return [`還有 ${d.images_pending} 張要看`, "warn"];
   if (d.items > 0) return ["全部確認", "ok"];
   if (d.images > 0) return [`${d.images} 張還沒標`, "warn"];
@@ -126,6 +133,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
     try { if (cfgDirty) await saveConfig(); await api.label(d.id, n === "" ? undefined : Number(n)); say(`開始標註 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張，先載入出題模型…`, "ok", { ms: 2500 }); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
   };
   const cancel = async () => { if (batch) { await api.cancelBatch(batch.id).catch(() => undefined); say("取消中，這一批出完就停", "warn"); } };
+  const resume = async () => { if (!batch) return; setBusy(true); try { await api.resumeBatch(batch.id); say("接著跑：先補模型作答與比對…", "ok", { ms: 2500 }); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); } };
   const doExport = async () => { setBusy(true); try { const r = await api.exportDataset(d.id); setExp(r); say(`匯出 ${r.rows} 列`); } catch (e) { say(String(e), "bad"); } finally { setBusy(false); } };
   const doRename = async () => { try { await api.updateDataset(d.id, { name: newName.trim() }); setRename(false); say("改好了"); reload(); } catch (e) { say(String(e), "bad"); } };
   const doDelete = async () => { await api.deleteDataset(d.id); say(`刪了 ${d.name}`, "warn"); setAskDelete(false); onDeleted(); };
@@ -165,8 +173,8 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
           </div>
           <div className="col">
             <Pop show={total === 0} className="next"><b>下一步：把照片丟進來</b><span className="hint">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</span></Pop>
-            {batch && <BatchCard b={batch} onCancel={cancel} skippedNote={skippedNote} />}
-            <Pop show={total > 0 && unlabelled > 0 && !running} className="next"><b>下一步：讓 AI 導師先標 {n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張</b><span className="hint">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}，約 20 秒/張；一致的自動通過，不一致的到「檢查」。</span></Pop>
+            {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
+            <Pop show={total > 0 && unlabelled > 0 && !running && !interrupted(batch)} className="next"><b>下一步：讓 AI 導師先標 {n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張</b><span className="hint">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}，約 20 秒/張；一致的自動通過，不一致的到「檢查」。</span></Pop>
             {total > 0 && <button className="primary big" onClick={label} disabled={busy || running || !judgeOk || gpuBusy || lowMem || unlabelled === 0 || (mode !== "auto" && nFixed === 0)}>{running ? `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}` : labelText}</button>}
             {total > 0 && mode !== "auto" && nFixed === 0 && <div className="bad hint">「設定」裡還沒有有效的指定題目</div>}
             {(full ?? d).images_pending > 0 && !running && <button onClick={() => setTab("review")}>去檢查（還有 {(full ?? d).images_pending} 張）→</button>}
@@ -223,15 +231,23 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   );
 }
 
-function BatchCard({ b, onCancel, skippedNote }: { b: Batch; onCancel: () => void; skippedNote: string | null }) {
+function BatchCard({ b, onCancel, onResume, busy, skippedNote }: { b: Batch; onCancel: () => void; onResume: () => void; busy: boolean; skippedNote: string | null }) {
   const j = b.job;
-  const idx = j?.phase === "generating" ? 0 : j?.phase === "predicting" ? 1 : j?.phase === "judging" ? 2 : 3;
-  const state = j?.state ?? "done";
+  const stuck = interrupted(b);
+  const u = b.unfinished;
+  const idx = stuck ? (u!.images > 0 ? 0 : u!.unpredicted > 0 ? 1 : 2) : j?.phase === "generating" ? 0 : j?.phase === "predicting" ? 1 : j?.phase === "judging" ? 2 : 3;
+  const state = stuck ? "interrupted" : j?.state ?? "done";
   const left = eta(j?.started, j?.done ?? 0, j?.total ?? 0);
   return (
-    <div className={`panel col ${state === "error" ? "card-bad" : state === "running" ? "card-accent" : ""}`}>
-      <div className="row" style={{ justifyContent: "space-between" }}><b>{state === "running" ? "這一輪" : "上一輪"}：{b.created_at.slice(5, 16).replace("T", " ")}</b>{state === "running" && <button onClick={onCancel}>取消</button>}</div>
+    <div className={`panel col ${state === "error" || state === "interrupted" ? "card-bad" : state === "running" ? "card-accent" : ""}`}>
+      <div className="row" style={{ justifyContent: "space-between" }}><b>{state === "running" ? "這一輪" : "上一輪"}：{b.created_at.slice(5, 16).replace("T", " ")}{j?.resumed ? "（接著跑）" : ""}</b>{state === "running" && <button onClick={onCancel}>取消</button>}</div>
       <div className="phase">{["出題", "模型作答", "比對", "人看"].map((l, i) => <div key={l} className={i < idx || state === "done" ? "ok" : i === idx && state === "running" ? "on" : ""}>{l}</div>)}</div>
+      {state === "interrupted" && (
+        <>
+          <div className="small bad">中斷了（server 重啟或取消）：{[u!.images > 0 ? `${u!.images} 張還沒出題` : "", u!.unpredicted > 0 ? `${u!.unpredicted} 題模型還沒答` : "", u!.unjudged > 0 ? `${u!.unjudged} 題還沒比對` : ""].filter(Boolean).join(" · ")}。出好的題都還在。</div>
+          <button className="primary" onClick={onResume} disabled={busy}>接著跑</button>
+        </>
+      )}
       {state === "running" && <><Bar done={j!.done} total={j!.total} /><div className="small">{phaseLabel(j!.phase)} {j!.done}/{j!.total}{left !== null ? `（約還要 ${left} 分鐘）` : j!.done === 0 ? "（載入出題模型中…）" : ""}</div></>}
       {state === "done" && <div className="small">{b.total} 題 · 一致 {b.verdicts?.accept ?? 0} · 不一致 {b.verdicts?.fix ?? 0} · 自動通過 {b.counts.auto ?? 0} · 還要看 {b.counts.pending ?? 0}</div>}
       {state === "cancelled" && <div className="small warn-text">已取消：出好的 {b.total} 題保留</div>}

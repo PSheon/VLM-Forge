@@ -50,6 +50,7 @@ export interface Job {
   started?: number;
   student_error?: string;
   triage?: Record<string, number>;
+  resumed?: boolean;
 }
 
 export interface Batch {
@@ -63,6 +64,7 @@ export interface Batch {
   total: number;
   dataset_id?: number | null;
   job?: Job | null;
+  unfinished?: { images: number; unpredicted: number; unjudged: number }; // autogen batches only
 }
 
 export interface DatasetConfig { mode?: "auto" | "both" | "fixed"; fixed?: string; topics?: string[]; focus?: string; skills?: Skill[] }
@@ -163,6 +165,7 @@ export const api = {
   addFolder: (id: number, dir: string, limit?: number) => j<{ added: number }>(post(`/api/datasets/${id}/folder`, { dir, limit })),
   label: (id: number, n?: number) => j<Batch>(post(`/api/datasets/${id}/label${n ? `?n_images=${n}` : ""}`, {})),
   cancelBatch: (qid: number) => j<Job>(post(`/api/queues/${qid}/cancel`, {})),
+  resumeBatch: (qid: number) => j<Batch>(post(`/api/queues/${qid}/resume`, {})),
   exportDataset: (id: number) => j<{ jsonl: string; rows: number; zip?: string; images?: number }>(post(`/api/datasets/${id}/export`, {})),
   downloadUrl: (id: number, kind: "jsonl" | "zip") => `/api/datasets/${id}/download/${kind}`,
   saveDatasetItem: (id: number, body: Record<string, unknown>) => j<Item>(post(`/api/datasets/${id}/items`, body)),

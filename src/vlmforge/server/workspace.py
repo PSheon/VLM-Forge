@@ -33,6 +33,7 @@ SKILLS = ("detect", "point", "query", "caption")
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 STATUSES = ("pending", "auto", "approved", "corrected", "discarded")
 SPOT_FRAC, SPOT_MIN = 0.1, 20  # judge-accepted items a human still sees (per queue)
+ALL = 10**9  # ``items(limit=ALL)``: every row, for pipelines
 # columns added after the first schema; (table, column, type) applied with ALTER TABLE
 MIGRATIONS = (
     ("items", "judge", "text"),
@@ -272,9 +273,26 @@ class Workspace:
     def unjudged(self, queue_id: int) -> list[dict]:
         return [
             it
-            for it in self.items(queue_id, "pending")
+            for it in self.items(queue_id, "pending", ALL)
             if it["pred"] is not None and not it["verdict"]
         ]
+
+    def unfinished(self, queue_id: int, image_ids: list[str]) -> dict:
+        """What an interrupted autogen batch still owes: images with no questions yet,
+        pending items the student has not answered, pending items not yet compared. A
+        server restart loses the in-memory job; ``/api/queues/{id}/resume`` uses this."""
+        done = {
+            r[0]
+            for r in self.db.execute(
+                "select distinct image_id from items where queue_id = ?", (queue_id,)
+            )
+        }
+        pend = self.items(queue_id, "pending", ALL)
+        return {
+            "images": sum(i not in done for i in image_ids),
+            "unpredicted": sum(it["pred"] is None for it in pend),
+            "unjudged": sum(not it["verdict"] for it in pend),
+        }
 
     def triage(self, queue_id: int, seed: int = 0) -> dict:
         """After judging: accepted items leave the human queue (status ``auto``) except a
@@ -315,6 +333,8 @@ class Workspace:
         return it
 
     def items(self, queue_id: int, status: str | None = None, limit: int = 2000) -> list[dict]:
+        """Items of a queue (joined with the image row); pass ``limit=ALL`` from pipelines —
+        the default is for the UI, and a 2 286-item batch once lost its tail to it."""
         q = (
             "select items.*, images.path, images.width, images.height, images.source"
             " from items join images on images.id = items.image_id where queue_id = ?"
