@@ -10,3 +10,6 @@ __pycache__/
 /adapters/
 web/node_modules/
 web/dist/
+web/tsconfig.tsbuildinfo
+research_notes/
+reports/
