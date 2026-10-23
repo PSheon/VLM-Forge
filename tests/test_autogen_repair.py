@@ -22,11 +22,11 @@ TRUNCATED = """{
 
 def test_repair_unwrapped_boxes():
     t = parse_teacher(MALFORMED)
-    assert [(o["name"], len(o["boxes"])) for o in t["objects"]] == [
-        ("machine", 1),
-        ("shelf", 1),
-        ("box", 3),
-        ("stool", 2),
+    assert [(o["name"], len(o["boxes"]), o["count"]) for o in t["objects"]] == [
+        ("machine", 1, 1),
+        ("shelf", 1, 1),
+        ("box", 3, 3),
+        ("stool", 2, 2),
     ]
     assert t["objects"][1]["boxes"][0] == [0.0, 0.0, 0.3, 0.355]
     assert t["questions"][0]["a"] == "No" and t["caption"]

@@ -41,17 +41,15 @@ INSPECTION_TOPICS = [
 TEACHER_PROMPT = """Look at this image and write training data for a small vision-language \
 model used in factories, warehouses and on robots.
 
-Answer with compact JSON only (no line breaks inside lists), exactly this shape:
-{{"objects": [{{"name": "<short noun, singular>", "boxes": [[x0, y0, x1, y1], ...]}}, ...],
+Answer with JSON only, exactly this shape:
+{{"objects": [{{"name": "<short noun, singular>", "count": <number of instances>}}, ...],
  "questions": [{{"q": "<question>", "a": "<short answer>"}}, ...],
  "caption": "<one or two factual sentences>"}}
 
 Rules:
-- objects: up to {max_objects} object types that are clearly visible; one box per instance, \
-tight, as integers 0-1000 (fraction of the image width / height times 1000); "boxes" is \
-always a list of lists; at most {max_instances} instances per type (skip a type with more). \
-Prefer people, vehicles, forklifts, pallets, boxes, shelves, doors, safety equipment, \
-machinery, furniture.
+- objects: up to {max_objects} object types that are clearly visible, each with how many \
+instances are visible. Prefer people, vehicles, forklifts, pallets, boxes, shelves, doors, \
+safety equipment, machinery, furniture.
 - questions, part 1 (3 to 4): a count ("How many ... are there?" answered with a digit), a \
 yes/no question, a colour or attribute, a location or spatial relation, an activity.
 - questions, part 2 (2 to 3 inspection questions, yes/no or a digit, only ones this image can \
@@ -61,12 +59,54 @@ answer): {topics}.
 {focus}"""
 
 
+GROUND_PROMPT = """Locate every "{name}" in this image (about {count}). Answer with JSON only: a \
+list of boxes, one per instance, as integers 0-1000 (fraction of the image width / height \
+times 1000), tight around the object:
+[[x0, y0, x1, y1], [x0, y0, x1, y1], ...]
+At most {max_instances} boxes. If there is none, answer []."""
+
+
 def teacher_prompt(focus: str = "", topics: list[str] | None = None) -> str:
     extra = f"- Focus on: {focus}" if focus else ""
     tl = "; ".join(INSPECTION_TOPICS + [t for t in (topics or []) if t.strip()])
-    return TEACHER_PROMPT.format(
-        max_objects=MAX_OBJECTS, max_instances=MAX_INSTANCES, focus=extra, topics=tl
-    )
+    return TEACHER_PROMPT.format(max_objects=MAX_OBJECTS, focus=extra, topics=tl)
+
+
+def ground_prompt(name: str, count: int) -> str:
+    return GROUND_PROMPT.format(name=name, count=count, max_instances=MAX_INSTANCES)
+
+
+def parse_boxes(text: str) -> list[list[float]]:
+    """A grounding answer -> normalised boxes; duplicates (the model looping) dropped."""
+    m = re.search(r"\[.*\]", text, re.S)
+    if not m:
+        return []
+    s = m.group(0)
+    try:
+        raw = json.loads(s)
+    except json.JSONDecodeError:
+        # cut back to the last complete inner box and close the list
+        cut = s.rfind("]")
+        try:
+            raw = json.loads(s[: cut + 1].rstrip().rstrip(",") + "]")
+        except json.JSONDecodeError:
+            raw = re.findall(r"\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]", s)
+    if raw and all(isinstance(x, int | float) for x in raw) and len(raw) == 4:
+        raw = [raw]
+    out: list[list[float]] = []
+    for b in raw or []:
+        if not isinstance(b, list | tuple) or len(b) != 4:
+            continue
+        try:
+            v = [min(1.0, max(0.0, float(x) / 1000.0)) for x in b]
+        except (TypeError, ValueError):
+            continue
+        v = [round(x, 4) for x in v]
+        if v[2] > v[0] and v[3] > v[1] and v not in out:
+            out.append(v)
+        if len(out) >= MAX_INSTANCES:
+            break
+    return out
 
 
 _BOX_GROUPS = re.compile(r'("boxes"\s*:\s*)((?:\[[^\[\]]*\]\s*,?\s*)+)')
@@ -110,17 +150,26 @@ def repair_json(text: str) -> str:
 
 
 def parse_teacher(text: str) -> dict:
-    """Judge output -> {"objects": [{"name", "boxes": [[0-1 floats]]}], "questions": [...],
-    "caption": str}; malformed parts are dropped, never guessed."""
+    """First teacher call -> {"objects": [{"name", "count", "boxes": []}], "questions": [...],
+    "caption": str}; boxes are filled by the grounding calls. Malformed parts are dropped."""
     raw = parse_json(repair_json(text))
     objects = []
+    seen: set[str] = set()
     for o in raw.get("objects", []) if isinstance(raw.get("objects"), list) else []:
         if not isinstance(o, dict) or not str(o.get("name", "")).strip():
             continue
+        name = str(o["name"]).strip().lower()[:40]
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            count = max(0, int(o.get("count", 0)))
+        except (TypeError, ValueError):
+            count = 0
         boxes = []
-        bl = o.get("boxes", []) or []
+        bl = o.get("boxes", []) or []  # tolerated if the model adds them anyway
         if len(bl) == 4 and all(isinstance(x, int | float) for x in bl):
-            bl = [bl]  # a single flat box
+            bl = [bl]
         for b in bl[:MAX_INSTANCES]:
             if isinstance(b, list | tuple) and len(b) == 4:
                 try:
@@ -129,7 +178,7 @@ def parse_teacher(text: str) -> dict:
                     continue
                 if v[2] > v[0] and v[3] > v[1]:
                     boxes.append([round(x, 4) for x in v])
-        objects.append({"name": str(o["name"]).strip().lower()[:40], "boxes": boxes})
+        objects.append({"name": name, "count": count or len(boxes), "boxes": boxes})
     questions = []
     for q in raw.get("questions", []) if isinstance(raw.get("questions"), list) else []:
         if isinstance(q, dict) and str(q.get("q", "")).strip() and str(q.get("a", "")).strip():
@@ -146,6 +195,8 @@ def items_from_teacher(t: dict, skills: set[str]) -> list[dict]:
     """(skill, prompt, teacher) tuples for one image."""
     out = []
     for o in t["objects"]:
+        if o.get("skipped"):  # more instances than the teacher can box reliably
+            continue
         if "detect" in skills:
             out.append({"skill": "detect", "prompt": o["name"], "teacher": {"boxes": o["boxes"]}})
         if "point" in skills and o["boxes"]:

@@ -178,12 +178,26 @@ class Judge:
         return self.proc.decode(new, skip_special_tokens=True)
 
     def generate(self, image_path: str, focus: str = "", topics: list[str] | None = None) -> dict:
-        """Teacher mode (``vlmforge.autogen``): objects with boxes, questions, caption."""
-        from .autogen import parse_teacher, teacher_prompt
+        """Teacher mode (``vlmforge.autogen``): one call for object names + counts, questions
+        and caption, then one short grounding call per object type (long box lists made the
+        32B model loop). Types with more than MAX_INSTANCES instances are not boxed."""
+        from .autogen import (
+            MAX_INSTANCES,
+            ground_prompt,
+            parse_boxes,
+            parse_teacher,
+            teacher_prompt,
+        )
 
         image = render(Image.open(image_path), {})
         raw_text = self.ask(image, teacher_prompt(focus, topics))
         t = parse_teacher(raw_text)
+        for o in t["objects"]:
+            if o["count"] > MAX_INSTANCES:
+                o["skipped"] = True
+                continue
+            if o["count"] > 0 and not o["boxes"]:
+                o["boxes"] = parse_boxes(self.ask(image, ground_prompt(o["name"], o["count"])))
         t["raw"] = raw_text[:2000]
         t["model"] = Path(self.model_dir).resolve().name
         return t

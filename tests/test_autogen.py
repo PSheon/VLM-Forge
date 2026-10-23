@@ -1,7 +1,15 @@
-from vlmforge.autogen import agree, auto_label, items_from_teacher, parse_teacher, teacher_prompt
+from vlmforge.autogen import (
+    agree,
+    auto_label,
+    ground_prompt,
+    items_from_teacher,
+    parse_boxes,
+    parse_teacher,
+    teacher_prompt,
+)
 
-TEACHER = """{"objects": [{"name": "Person", "boxes": [[100, 200, 300, 900], [500, 100, 600, 400]]},
- {"name": "forklift", "boxes": []}, {"bad": 1}],
+TEACHER = """{"objects": [{"name": "Person", "count": 2}, {"name": "forklift", "count": 0},
+ {"name": "person", "count": 9}, {"bad": 1}],
  "questions": [{"q": "How many people are there?", "a": "2"},
   {"q": "Is anyone wearing a helmet?", "a": "No"}, {"q": "", "a": "x"}],
  "caption": "Two people stand in a warehouse aisle."}"""
@@ -9,9 +17,10 @@ TEACHER = """{"objects": [{"name": "Person", "boxes": [[100, 200, 300, 900], [50
 
 def test_parse_and_items():
     t = parse_teacher(TEACHER)
-    assert [o["name"] for o in t["objects"]] == ["person", "forklift"]
-    assert t["objects"][0]["boxes"][0] == [0.1, 0.2, 0.3, 0.9]
+    assert [(o["name"], o["count"]) for o in t["objects"]] == [("person", 2), ("forklift", 0)]
     assert len(t["questions"]) == 2 and t["caption"].startswith("Two people")
+    t["objects"][0]["boxes"] = [[0.1, 0.2, 0.3, 0.9], [0.5, 0.1, 0.6, 0.4]]
+    t["objects"].append({"name": "chair", "count": 30, "boxes": [], "skipped": True})
     items = items_from_teacher(t, {"detect", "point", "query", "caption"})
     kinds = [(i["skill"], i["prompt"]) for i in items]
     assert kinds == [
@@ -21,10 +30,24 @@ def test_parse_and_items():
         ("query", "How many people are there?"),
         ("query", "Is anyone wearing a helmet?"),
         ("caption", "normal"),
-    ]
+    ]  # the skipped chair type produces nothing
     assert items[1]["teacher"]["points"][0] == [0.2, 0.55]
     assert "safety helmet" in teacher_prompt() and "spill" not in teacher_prompt()
     assert "ladders" in teacher_prompt(topics=["whether ladders are secured"])
+    assert '"person" in this image (about 2)' in ground_prompt("person", 2)
+
+
+def test_parse_boxes_tolerates_loops_and_cuts():
+    assert parse_boxes("[[100, 200, 300, 900], [500, 100, 600, 400]]") == [
+        [0.1, 0.2, 0.3, 0.9],
+        [0.5, 0.1, 0.6, 0.4],
+    ]
+    assert parse_boxes("[100, 200, 300, 900]") == [[0.1, 0.2, 0.3, 0.9]]
+    assert parse_boxes("[]") == [] and parse_boxes("none") == []
+    looped = "[" + ", ".join(["[15, 0, 55, 62]"] * 40) + ", [15, 0, 55"
+    assert parse_boxes(looped) == [[0.015, 0.0, 0.055, 0.062]]  # dedup + truncated tail
+    many = "[" + ", ".join(f"[{i * 10}, 0, {i * 10 + 5}, 10]" for i in range(30)) + "]"
+    assert len(parse_boxes(many)) == 12
 
 
 def test_agreement_rules():
