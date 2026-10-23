@@ -232,7 +232,11 @@ class Engine:
                     {"points": [[p["x"], p["y"]] for p in ps]} for ps in m.point(images, prompt)
                 ]
             if skill == "query":
-                return [{"text": t} for t in m.query(images, prompt)]
+                # text plus any points the answer grounded (see Moondream.query_grounded)
+                return [
+                    {"text": a["text"], **({"points": a["points"]} if a["points"] else {})}
+                    for a in m.query_grounded(images, prompt)
+                ]
             if skill == "caption":
                 return [{"text": t} for t in m.caption(images, prompt or "normal")]
             raise ValueError(f"unknown skill {skill!r}")

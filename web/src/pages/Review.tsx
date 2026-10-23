@@ -1,7 +1,7 @@
 // ② 檢查 (docs/ui-spec §4): one image, one question at a time; every key saves and moves on.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
+import { answerText, api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
 import Canvas from "../components/Canvas";
 import { ActionsHead, Dialog, Pill, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
@@ -94,6 +94,8 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
   const qt = it?.skill === "query" ? (/how many|count|number of/i.test(it.prompt) ? "count" : /^(is|are|does|do|can|has|have|was|were)\b/i.test(it.prompt) ? "yesno" : "text") : null;
   const setCount = (v: number) => { const n = Math.max(0, Math.round(v)); setLabel({ text: String(n) }); setDirty(true); };
   const [pressed, setPressed] = useState("");
+  // the model's answer as a label: a count it gave by pointing becomes the number of points
+  const modelAnswer = (p: Pred): Pred => (qt === "count" && !/\d/.test(p.text ?? "") && p.points?.length ? { text: String(p.points.length) } : qt ? { text: p.text ?? "" } : structuredClone(p));
   const focus = useMemo(() => {
     if (!it || (it.skill !== "detect" && it.skill !== "point")) return null;
     const pb = (p: number[]) => [p[0] - 0.02, p[1] - 0.02, p[0] + 0.02, p[1] + 0.02];
@@ -147,7 +149,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       else if (qt === "count" && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); setCount(Number(label?.text ?? 0) + (e.key === "ArrowUp" ? 1 : -1)); }
       else if (e.key === "d" || e.key === "D") discard();
       else if (e.key === "1" && it?.teacher) edit(structuredClone(it.teacher), "改用預標");
-      else if (e.key === "2" && it?.pred) edit(structuredClone(it.pred), "改用模型答案");
+      else if (e.key === "2" && it?.pred) edit(modelAnswer(it.pred), "改用模型答案");
       else if (e.key === "3" && spatial && it?.teacher) fillFromTeacher();
       else if ((e.key === "p" || e.key === "P") && pair) { setSyncPoint((v) => !v); say(syncPoint ? "存 detect 時不同步 point" : "存 detect 時同步 point（框中心）"); }
       else if ((e.key === "e" || e.key === "E") && !spatial) { e.preventDefault(); textRef.current?.focus(); }
@@ -218,7 +220,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
               {it.skill === "caption" && unsupported.length > 0 && <div className="row hint"><span className="muted">圖裡沒有：</span>{unsupported.map((p) => <span key={p} className="chip bad" title="點 ✕ 從文字刪掉">{p}<button onClick={() => removePhrase(p)} aria-label="刪掉">✕</button></span>)}</div>}
               <div className="row">
                 {it.teacher && <button onClick={() => edit(structuredClone(it.teacher!), "改用預標")} title={it.teacher.text}>預標：{short(it.teacher.text)}</button>}
-                {it.pred && <button onClick={() => edit(structuredClone(it.pred!), "改用模型答案")} title={it.pred.text}>模型：{short(it.pred.text)}</button>}
+                {it.pred && <button onClick={() => edit(modelAnswer(it.pred!), "改用模型答案")} title={answerText(it.pred)}>模型：{short(answerText(it.pred))}</button>}
               </div>
             </>
           )}

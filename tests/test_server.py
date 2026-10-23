@@ -292,3 +292,30 @@ def test_item_row_shapes():
     assert item_row({**base, "skill": "point", "prompt": "p", "label": {"points": [[0.1, 0.2]]}})[
         "points"
     ]
+
+
+def test_retriage_keeps_the_spot_sample(tmp_path, monkeypatch):
+    """Re-running triage (POST /api/queues/{id}/triage) on a half-reviewed batch must not
+    re-draw the spot check: once it auto-passed 128 of 149 sampled questions."""
+    from vlmforge.server import workspace as wsmod
+
+    monkeypatch.setattr(wsmod, "SPOT_MIN", 0)
+    monkeypatch.setattr(wsmod, "SPOT_FRAC", 0.2)
+    ws = Workspace(tmp_path / "ws")
+    im = ws.add_image_bytes(png_bytes("red"), ext="png")
+    q = ws.create_queue("b", "query", "base")
+    box = {"boxes": [[0.1, 0.1, 0.5, 0.5]]}
+    for i in range(50):
+        iid = ws.add_item(im["id"], "detect", f"o{i}", box, "base", q["id"], "auto", box)
+        ws.set_judge(iid, {"verdict": "accept", "note": "", "model": "agreement"})
+    first = ws.triage_items(q["id"])
+    assert first["spot"] == 10 and first["auto"] == 40
+    sampled = {it["id"] for it in ws.items(q["id"], "pending", wsmod.ALL)}
+    # a few more accepted items arrive (e.g. re-answered questions), then triage runs again
+    for i in range(5):
+        iid = ws.add_item(im["id"], "detect", f"n{i}", box, "base", q["id"], "auto", box)
+        ws.set_judge(iid, {"verdict": "accept", "note": "", "model": "agreement"})
+    second = ws.triage_items(q["id"])
+    still = {it["id"] for it in ws.items(q["id"], "pending", wsmod.ALL)}
+    assert sampled <= still  # nothing already drawn was auto-passed
+    assert second["auto"] == 4 and len(still) == 11  # budget round(0.2 * 55) = 11 → 1 new draw
