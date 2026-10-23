@@ -203,6 +203,12 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
   };
 
   const pct = (v: number) => `${v * 100}%`;
+  // coverage against the pre-label (alt) boxes: a box is ✓ once the answer has a point inside
+  // it (point) or a box overlapping it (detect, IoU > 0.3); a point inside no box is "out"
+  const inBox = (p: number[], b: number[]) => p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3];
+  const altBoxes = (spatial && alt?.boxes) || [];
+  const covered = altBoxes.map((b) => (skill === "point" ? points.some((p) => inBox(p, b)) : boxes.some((c) => iou(c, b) > 0.3)));
+  const outside = skill === "point" && altBoxes.length ? points.map((p) => !altBoxes.some((b) => inBox(p, b))) : [];
   const boxStyle = (b: number[]) => ({ left: pct(b[0]), top: pct(b[1]), width: pct(b[2] - b[0]), height: pct(b[3] - b[1]) });
   const cursor = panning ? (drag?.kind === "pan" ? "grabbing" : "grab") : editable ? "crosshair" : "default";
   const overlays = !hide;
@@ -228,7 +234,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
       <div className="cv-view" ref={view} style={{ height: fitAspect && viewH ? viewH : height ?? "calc(100vh - 170px)", cursor }} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onContextMenu={(e) => e.preventDefault()}>
         <div className="cv-stage" ref={stage} style={{ width: fit.w, height: fit.h, left: fit.ox, top: fit.oy, transform: `translate(${t.x}px, ${t.y}px) scale(${z})`, ["--s" as string]: z }}>
           <img ref={img} src={url} className={ready ? "on" : ""} draggable={false} alt="" onLoad={(e) => measured(e.currentTarget)} onError={() => setFailed(url)} />
-          {overlays && spatial && showAlt && alt?.boxes?.map((b, i) => <div key={`a${i}`} className="bx alt ro" style={boxStyle(b)}><span className="tag alt">{labels?.alt ?? "預標"} {i + 1}</span></div>)}
+          {overlays && spatial && showAlt && alt?.boxes?.map((b, i) => <div key={`a${i}`} className={`bx alt ro${covered[i] ? " cov" : ""}`} style={boxStyle(b)}><span className="tag alt">{labels?.alt ?? "預標"} {i + 1}{covered[i] ? " ✓" : ""}</span></div>)}
           {overlays && spatial && showAlt && alt?.points?.map((p, i) => <div key={`ap${i}`} className="pt alt ro" style={{ left: pct(p[0]), top: pct(p[1]) }} />)}
           {overlays && skill === "detect" && boxes.map((b, i) => (
             <div key={i} data-i={i} className={`bx${sel === i ? " sel" : ""}${editable ? "" : " ro"}`} style={boxStyle(b)}>
@@ -236,7 +242,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
               {editable && sel === i && [0, 1, 2, 3].map((c) => <div key={c} data-i={i} data-corner={c} className={`h h${c}`} />)}
             </div>
           ))}
-          {overlays && skill === "point" && points.map((p, i) => <div key={i} data-i={i} className={`pt${sel === i ? " sel" : ""}${editable ? "" : " ro"}`} style={{ left: pct(p[0]), top: pct(p[1]) }} title={`${i + 1}`}><span className="tag">{tags?.[i] ?? `${i + 1}`}</span></div>)}
+          {overlays && skill === "point" && points.map((p, i) => <div key={i} data-i={i} className={`pt${sel === i ? " sel" : ""}${editable ? "" : " ro"}${outside[i] ? " out" : ""}`} style={{ left: pct(p[0]), top: pct(p[1]) }} title={`${i + 1}`}><span className="tag">{tags?.[i] ?? `${i + 1}`}</span></div>)}
           {drag?.kind === "new" && <div className="draft" style={boxStyle(fix([drag.x0, drag.y0, drag.x1, drag.y1]))} />}
         </div>
         <Pop show={!ready} className="cv-loading">
@@ -248,4 +254,5 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
 }
 
 function clamp(v: number, lo = 0, hi = 1) { return Math.max(lo, Math.min(hi, v)); }
+function iou(a: number[], b: number[]) { const w = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])), h = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1])); const i = w * h; const u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i; return u > 0 ? i / u : 0; }
 function fix(b: number[]) { return [Math.min(b[0], b[2]), Math.min(b[1], b[3]), Math.max(b[0], b[2]), Math.max(b[1], b[3])].map((v) => +clamp(v).toFixed(4)); }

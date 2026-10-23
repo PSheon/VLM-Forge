@@ -1,48 +1,68 @@
 # VLM-Forge
 
-**Fine-tune [Moondream 3.1](https://huggingface.co/moondream/moondream3.1-9B-A2B) for your own scene — detect, point, query and caption — without writing labels by hand.**
+**Fine-tune [Moondream 3.1](https://huggingface.co/moondream/moondream3.1-9B-A2B) locally for your own scene — detect, point, query and caption — without writing labels by hand.**
 
-An AI teacher (Qwen3-VL) looks at your photos, writes the questions and the answers, Moondream answers the same questions, the two are compared, and you only check what they disagree on. Confirmed answers become a dataset; one button trains a LoRA adapter; the adapter is scored against the untouched base on held-out images and exported in the exact layout Moondream's **Photon** runtime (kestrel) loads on a **Jetson Orin**.
+[![version](https://img.shields.io/badge/version-0.2.0-e2600f)](CHANGELOG.md) [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE) ![python](https://img.shields.io/badge/python-3.12-3776ab) ![Moondream 3.1](https://img.shields.io/badge/Moondream-3.1%209B--A2B-1b1f26)
+
+An AI teacher (Qwen3-VL) looks at your photos and writes the questions and the answers, Moondream answers the same questions, the two are compared, and you only check what they disagree on — one question at a time, keyboard first. Confirmed answers become a dataset; one button trains a LoRA adapter; the adapter is scored against the untouched base on held-out images and exported in the exact layout Moondream's **Photon** runtime (kestrel) loads on a **Jetson Orin**.
+
+As far as we know this is the only local trainer for Moondream 3.1: the official repo's `lora.py` only downloads cloud-trained variants, and Moondream's cloud fine-tuning closes on 2026-11-13.
 
 Built for factory / warehouse CCTV (是否有值班人員、有沒有戴安全帽、出口有沒有被擋…), but nothing in it is tied to that domain.
 
-> Moondream 3.1 微調工具：AI 導師先標、你只看不一致的題、一鍵 LoRA 訓練、在 held-out 考卷上和 base 比分、匯出到 Orin。決議全部在 [GOALS.md](GOALS.md)，介面規格在 [docs/ui-spec.md](docs/ui-spec.md)。
+> Moondream 3.1 本機微調工具：AI 導師先標、你只看不一致的題、一鍵 LoRA 訓練、在 held-out 考卷上和 base 比分、匯出到 Orin。決議在 [GOALS.md](GOALS.md)，介面規格在 [docs/ui-spec.md](docs/ui-spec.md)，版本紀錄在 [CHANGELOG.md](CHANGELOG.md)。
 
 ## Why
 
-- Moondream never shipped local training code and its cloud fine-tuning closes on 2026-11-13. VLM-Forge is a pure-PyTorch port of 3.1 (vision tower, text MoE, region head, LoRA) whose base scores match the official runtime, plus a trainer for it.
-- LoRA goes on the text MLPs only (dense layers + every MoE expert), the same `lora_state_dict` layout kestrel reads — so what you train here runs on Photon unchanged. The region head is an opt-in extra (Forge-only).
-- Labelling is the bottleneck, not training. The teacher → student → compare loop means a 120-image batch is ~2 800 questions of which you look at the disagreements, one question at a time, keyboard only.
+- **A real 3.1 port you can backprop through.** Pure PyTorch: vision tower, text MoE (64 experts, FP8 dequantised), region head, LoRA on the dense layers and every expert. Base scores match the official runtime on three held-out suites.
+- **Adapters that run on the edge.** LoRA goes on the text MLPs only, in kestrel's `lora_state_dict` layout, so the adapter loads into Photon unchanged. The region head is an opt-in extra (Forge-only).
+- **Labelling is the bottleneck, not training.** Teacher → student → compare, then triage per question: on a 120-image warehouse set the teacher wrote 2 845 questions, 1 344 agreed and passed automatically, and a human looks at 1 469.
 
 ## The three steps
 
+Every page has the same shape: content on the left, an action column on the right whose first element is the page's one orange button. Sub-views open from the content and go back with `←` or `Esc`.
+
 ### ① 資料集 — photos in, confirmed answers out
 
-Drop photos, a zip or a folder path. Pick how the teacher works: automatic questions (objects, counts, yes/no, attributes, inspection checks, a caption), fixed prompts you write once (`detect: person, helmet` / `query: Is anyone without a helmet?`), or both. 10 % of the images are held back as the dataset's validation split.
+Drop photos, a zip or a folder path. The grid shows how many questions on each image still disagree; the orange button is always the next thing to do. The teacher's settings live in the action column: automatic questions (objects, counts, yes/no, attributes, inspection checks, a caption), fixed prompts you write once (`detect: person, helmet` / `query: Is anyone without a helmet?`), or both. 10 % of the images become the dataset's validation split.
 
-![Dataset page: thumbnails with per-image counts, the last batch and the next step](docs/screenshots/02-dataset.jpg)
+![Dataset page: thumbnails with disagreement counts, the next step, the last batch](docs/screenshots/dataset.jpg)
 
-![Settings: teacher mode, fixed prompts with live validation, inspection topics](docs/screenshots/03-settings.jpg)
+![AI teacher settings in the action column: mode, fixed prompts with live validation, inspection topics](docs/screenshots/settings.jpg)
 
-Review lives inside the dataset: one image, one question at a time, disagreements first. `Enter` saves, `1`/`2` take the teacher's or the model's answer, `Shift+Enter` saves the rest of the image, `D` discards. Boxes and points are edited on the canvas (drag, resize, `Tab`, arrows, `Delete`); captions show the phrases the judge could not find in the image as removable chips.
+**Review** — one image, one question at a time, disagreements first, with this image's question list beside it.
 
-![Review: a disagreement on a count question, with both answers one key away](docs/screenshots/05-review-detect.jpg)
+| Question | What you do |
+| --- | --- |
+| yes / no | `Y` or `N` — saves and moves on |
+| count | type the digits or `↑↓`, `Enter` |
+| detect | drag boxes, `Tab` / arrows / `Delete`; `3` adds the pre-label boxes you are missing; saving can save the matching point question too (`P`) |
+| point | click to add, drag to move; `3` puts a point in every pre-label box that has none; `Backspace` removes the last |
+| caption | edit the text; phrases the judge could not find in the image are chips you can delete |
 
-### ② 訓練 — one button
+`Enter` saves, `1` / `2` take the teacher's or the model's answer, `Shift+Enter` saves the rest of the image, `D` discards, `S` skips. The canvas zooms to the boxes in question (`F` for the whole image), pre-label boxes turn green once your answer covers them, and a key bar at the bottom shows what works right now.
 
-Tick the datasets, keep the defaults (steps from the number of confirmed images, lr 2e-4, rank 16). Blockers are red and stop you; warnings are yellow and do not. The run trains, then scores itself on every held-out suite and each dataset's validation split, and gates against base.
+![Review, yes/no: two keys, saves on press](docs/screenshots/review-yesno.jpg)
 
-![Train: checks under the button, loss curve, base vs adapter per skill](docs/screenshots/06-train.jpg)
+![Review, detect: pre-label coverage in green, and the option to save the matching point question](docs/screenshots/review-detect.jpg)
+
+![Review, point: 3 filled a point into every uncovered pre-label box](docs/screenshots/review-point.jpg)
+
+### ② 訓練 — pick, check, one button
+
+Pick datasets as cards (confirmed questions, images, a bar per skill), keep the defaults (steps from the number of confirmed images, lr 2e-4, rank 16), and read the summary next to the button: what will be trained, for how long, and which exams score it. The run trains, scores itself on every held-out suite and each dataset's validation split, and gates against base.
+
+![Train: dataset cards, settings, run summary, history with loss curve and gate](docs/screenshots/train.jpg)
 
 ### ③ 測試 — base vs your model
 
-One card per exam: the target suite (factory CCTV) is marked, references are dimmed, every cell shows the score and the delta. 看差異 walks through the items that changed, side by side with the ground truth. 試一張 runs base and the adapter on any image with quick inspection prompts. 匯出到 Orin downloads `adapter.pt` with a loader and a latency script.
+One card per exam (the target suite is marked, references are dimmed), every cell with its delta. 看差異 walks through the items that changed, both canvases zooming together. 試一張 runs base and the adapter on any image with factory quick prompts. The Orin bundle is a section in the action column: `adapter.pt`, a loader, a latency script.
 
-![Scores: one card per held-out suite, deltas against base](docs/screenshots/07-test-scores.jpg)
+![Scores: one card per held-out suite, deltas against base, Orin export section](docs/screenshots/test-scores.jpg)
 
-![Diff: base vs adapter vs ground truth, item by item](docs/screenshots/08-test-diff.jpg)
+![Diff: base vs adapter vs ground truth, item by item, synced zoom](docs/screenshots/test-diff.jpg)
 
-![Playground: the same image through base and the adapter, with factory quick prompts](docs/screenshots/09-test-play.jpg)
+![Playground: the same image through base and the adapter](docs/screenshots/test-play.jpg)
 
 ## Quick start
 
@@ -64,7 +84,7 @@ hf download Qwen/Qwen3-VL-8B-Instruct  --local-dir model-cache/judge-8b
 uv run forge serve --port 8796          # open http://localhost:8796
 ```
 
-Held-out suites are optional: without them the test page scores only your datasets' validation splits. `forge manifests` builds them from a Data Core release if you have one.
+Held-out suites are optional: without them the test page scores only your datasets' validation splits. `forge manifests` builds them from a Data Core release if you have one. Labelling progress lives in memory; if the server restarts mid-batch, the dataset page offers 「接著跑」 to resume.
 
 ## CLI
 
@@ -87,16 +107,16 @@ Adapter file: `{"lora_state_dict", "rank", "alpha", "region_head"?}` — keys `t
 | `src/vlmforge/model/` | Moondream 3.1 in plain PyTorch: vision, text (MoE, FP8 experts dequantised), region, `TextLoRA`, `RegionHead` |
 | `src/vlmforge/{data,evaluate,gate,train}.py` | manifests and mixtures, per-skill metrics, the gate, the LoRA trainer with self-distillation replay |
 | `src/vlmforge/{autogen,judge}.py` | teacher prompts and parsing, agreement rules, the Qwen3-VL judge |
-| `src/vlmforge/server/` | FastAPI: workspace (SQLite), datasets, one GPU worker, the training pipeline, the Orin bundle |
-| `web/` | Vite + React + TypeScript UI; `docs/ui-spec.md` is its spec |
+| `src/vlmforge/server/` | FastAPI: workspace (SQLite), datasets, per-question triage, one GPU worker, the training pipeline, the Orin bundle |
+| `web/` | Vite + React + TypeScript UI; `docs/ui-spec.md` is its spec, `web/src/components/ui.tsx` the shared pieces |
 | `tests/` | CPU-only unit tests (`uv run pytest`) |
 | `model-cache/`, `runs/`, `workspace/`, `data/` | not in git |
 
-Branches: `feat/* → dev → main`. `ruff` for lint and format, `uv` for the environment.
+Branches: `feat/* → dev → main`. `ruff` for lint and format, `uv` for the environment. Each version is tagged and listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Status
 
-Working end to end on one GB300 (2026-10-23): a 120-image warehouse set → 2 845 questions → review → train → score → diff → Orin bundle. The port's base scores match the official runtime on three held-out suites; the same trainer, on a larger in-domain set, raised CCTV detect from 0.37 to 0.46 (text-MLP LoRA only). Not yet verified on real Orin hardware.
+v0.2.0 (2026-10-23), working end to end on one GB300: a 120-image warehouse set → 2 845 questions → per-question review → train → score → diff → Orin bundle. The port's base scores match the official runtime on three held-out suites; the same trainer, on a larger in-domain set, raised CCTV detect from 0.37 to 0.46 (text-MLP LoRA only). Not yet verified on real Orin hardware.
 
 ## License
 

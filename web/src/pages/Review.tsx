@@ -7,7 +7,7 @@ import { Dialog, Pill, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
 import type { Step } from "../App";
 
-export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard, header }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void; header?: ReactNode }) {
+export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard, header, onExit }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void; header?: ReactNode; onExit?: () => void }) {
   const { say } = useToast();
   const dsId = datasetId;
   const [sum, setSum] = useState<Dataset | null>(null);
@@ -68,12 +68,27 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     else { say("這張看完了 ✓", "ok", { ms: 1200 }); refresh(); setTimeout(() => nextImage(review!.image.id), 300); }
   };
 
+  // detect and point usually ask about the same object on the same image: saving the detect
+  // question can save the matching point question too, one point at each box centre
+  const [syncPoint, setSyncPoint] = useState(true);
+  const pair = it?.skill === "detect" ? items.find((x) => x.skill === "point" && x.status === "pending" && x.prompt.trim().toLowerCase() === it.prompt.trim().toLowerCase()) ?? null : null;
   const acceptWith = useCallback(async (p?: Pred) => {
     if (!it || !review) return;
     const final = p ?? label ?? emptyLabel(it.skill);
     const changed = JSON.stringify(final) !== JSON.stringify(it.pred);
-    try { const saved = await api.review(it.id, changed ? "correct" : "approve", reviewer, final); say(changed ? "已存（你的修正）✓" : "已存 ✓"); advance([{ ...it, ...saved }]); } catch (e) { say(String(e), "bad"); }
-  }, [it, review, label, reviewer]); // eslint-disable-line react-hooks/exhaustive-deps
+    try {
+      const saved = await api.review(it.id, changed ? "correct" : "approve", reviewer, final);
+      const done: Item[] = [{ ...it, ...saved }];
+      if (pair && syncPoint) {
+        const pts = (final.boxes ?? []).map((b) => [+((b[0] + b[2]) / 2).toFixed(4), +((b[1] + b[3]) / 2).toFixed(4)]);
+        const sp = await api.review(pair.id, "correct", reviewer, { points: pts });
+        done.push({ ...pair, ...sp });
+        const pid = pair.id;
+        say(`已存 ✓ · 也存了 Point：${pair.prompt}（${pts.length} 點，框中心）`, "ok", { action: { label: "復原 point", run: async () => { await api.reopen(pid); say("Point 回到待看", "warn"); if (review) open(await api.reviewImage(review.image.id)); } } });
+      } else say(changed ? "已存（你的修正）✓" : "已存 ✓");
+      advance(done);
+    } catch (e) { say(String(e), "bad"); }
+  }, [it, review, label, reviewer, pair, syncPoint]); // eslint-disable-line react-hooks/exhaustive-deps
   const accept = useCallback(() => acceptWith(), [acceptWith]);
   // question type decides the answer widget: yes/no → two keys, count → a number, else text
   const qt = it?.skill === "query" ? (/how many|count|number of/i.test(it.prompt) ? "count" : /^(is|are|does|do|can|has|have|was|were)\b/i.test(it.prompt) ? "yesno" : "text") : null;
@@ -134,13 +149,14 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       else if (e.key === "1" && it?.teacher) edit(structuredClone(it.teacher), "改用預標");
       else if (e.key === "2" && it?.pred) edit(structuredClone(it.pred), "改用模型答案");
       else if (e.key === "3" && spatial && it?.teacher) fillFromTeacher();
+      else if ((e.key === "p" || e.key === "P") && pair) { setSyncPoint((v) => !v); say(syncPoint ? "存 detect 時不同步 point" : "存 detect 時同步 point（框中心）"); }
       else if ((e.key === "e" || e.key === "E") && !spatial) { e.preventDefault(); textRef.current?.focus(); }
       else if ((e.key === "z" || e.key === "Z") && it) { setLabel(initial(it)); setDirty(false); say("已還原"); }
       else if (e.key === "ArrowRight" && !e.shiftKey && !spatialSelected()) goTo(idx + 1);
       else if (e.key === "ArrowLeft" && !e.shiftKey && !spatialSelected()) goTo(idx - 1);
       else if (e.key === "s" || e.key === "S") guarded(() => nextImage(review.image.id));
       else if (e.key === "g" || e.key === "G") setGrid((g) => !g);
-      else if (e.key === "Escape") setGrid(false);
+      else if (e.key === "Escape") { if (grid) setGrid(false); else if (!dirty) onExit?.(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -190,7 +206,8 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
               <div className="hint muted">目前 {summary(label)} · 預標 {summary(it.teacher)} · 模型 {summary(it.pred)}{changed ? " · ✎ 已改" : ""}</div>
               {negative && <div className="warn hint">確認這張沒有 {it.prompt}？（預標或模型有框，你全刪了）</div>}
               <div className="row">{it.teacher && <button onClick={() => edit(structuredClone(it.teacher!), "改用預標")}><kbd>1</kbd> 用預標的{it.skill === "detect" ? "框" : "點"}</button>}{it.pred && <button onClick={() => edit(structuredClone(it.pred!), "改用模型答案")}><kbd>2</kbd> 用模型的{it.skill === "detect" ? "框" : "點"}</button>}{it.teacher?.boxes?.length ? <button onClick={fillFromTeacher} title="預標有、目前沒有的，補上"><kbd>3</kbd> 補預標缺的{it.skill === "detect" ? "框" : "點"}</button> : null}</div>
-              <div className="hint muted">{it.skill === "point" ? "點一下加點、拖點移動、點選後 Del 刪、Backspace 刪最後一點；點要落在藍色預標框內才算一致" : "拖曳畫框、拖角縮放、點框選取；Del 刪選取、Backspace 刪最後一框"}</div>
+              <div className="hint muted">{it.skill === "point" ? "點一下加點、拖點移動、Del 刪選取、Backspace 刪最後一點。預標框有點了會變綠 ✓；紅點＝不在任何預標框裡" : "拖曳畫框、拖角縮放、點框選取；Del 刪選取、Backspace 刪最後一框。預標框被蓋到會變綠 ✓"}</div>
+              {pair && <label className="row hint sync"><input type="checkbox" checked={syncPoint} onChange={(e) => setSyncPoint(e.target.checked)} /> 存的時候同時存 <b>Point：{pair.prompt}</b>（每框中心一點）<kbd>P</kbd></label>}
             </>
           ) : (
             <>
@@ -222,7 +239,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
           <div className="hint muted">{reviewer} 認領中{claimedOther ? `（${claimedOther} 也在看）` : ""}</div>
         </Fade>
       </div>
-      <KeyBar pressed={pressed} keys={[["Enter", changed ? "存修正" : "沒問題"], ...(qt === "yesno" ? [["Y", "yes"], ["N", "no"]] as [string, string][] : qt === "count" ? [["0–9", "數字"], ["↑↓", "加減"]] as [string, string][] : []), ["D", "丟棄"], ...(it.teacher ? [["1", "用預標"]] as [string, string][] : []), ...(it.pred ? [["2", "用模型"]] as [string, string][] : []), ...(spatial ? [...(it.teacher?.boxes?.length ? [["3", "補預標缺的"]] as [string, string][] : []), ["Tab", "選取"], ["Del", "刪選取"], ["⌫", "刪最後"], ["F", "全圖"]] as [string, string][] : qt === "text" || it.skill === "caption" ? [["E", "改文字"]] as [string, string][] : []), ["←→", "換題"], ["Shift+Enter", `剩 ${pendingLeft} 題全存`], ["S", "跳過"], ["G", "所有圖"]]} />
+      <KeyBar pressed={pressed} keys={[["Enter", changed ? "存修正" : "沒問題"], ...(qt === "yesno" ? [["Y", "yes"], ["N", "no"]] as [string, string][] : qt === "count" ? [["0–9", "數字"], ["↑↓", "加減"]] as [string, string][] : []), ["D", "丟棄"], ...(it.teacher ? [["1", "用預標"]] as [string, string][] : []), ...(it.pred ? [["2", "用模型"]] as [string, string][] : []), ...(spatial ? [...(it.teacher?.boxes?.length ? [["3", "補預標缺的"]] as [string, string][] : []), ...(pair ? [["P", syncPoint ? "同步 point：開" : "同步 point：關"]] as [string, string][] : []), ["Tab", "選取"], ["Del", "刪選取"], ["⌫", "刪最後"], ["F", "全圖"]] as [string, string][] : qt === "text" || it.skill === "caption" ? [["E", "改文字"]] as [string, string][] : []), ["←→", "換題"], ["Shift+Enter", `剩 ${pendingLeft} 題全存`], ["S", "跳過"], ["G", "所有圖"], ["Esc", "回圖片"]]} />
       <Dialog open={!!pendingJump} onClose={() => setPendingJump(null)}>
         <h2>有改動還沒存</h2>
         <div className="hint">要丟掉這題的改動嗎？</div>
