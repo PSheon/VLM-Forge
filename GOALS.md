@@ -1,96 +1,73 @@
 # GOALS — 唯一決議入口
 
-VLM-Forge 的唯一目標、範圍與規格。與程式、其他文件或其他 session 牴觸時以本文件為準；改方向先改本文件。只寫現行決議，過時內容直接刪除（歷史在 git）。
-簽核：Paul（grill Q1–Q24，2026-10-23）。Repo 由 Claude 全權負責，細節自行決定，只在真正的阻礙時問 Paul。
+VLM-Forge 的目標、範圍與規格。與程式、其他文件或其他 session 牴觸時以本文件為準；改方向先改本文件。只寫現行決議，過時內容直接刪除（歷史在 git）。
+簽核：Paul（重新 grill Q1–Q16，2026-10-23）。Repo 由 Claude 全權負責，細節自行決定，只在 v1 完成點與真正卡住時通知 Paul。
 
 ## 1. 目標
 
-VLM-Forge 是 **Moondream 3.1 微調的唯一家**：detect / point / query / caption 四種 skill 的 LoRA 微調、評估、以及讓人監督與修正模型輸出的 UI，整套工具鏈自給自足。
+Paul 個人的 **Moondream 3.1 微調工具**，跑在 GB300（資料在那裡）。一條線走完：
 
-動機：①把 3.1 的輸出變成我們資料的飛輪（模型預標 → **judge 自動審** → 人只看被標紅的和抽查樣本 → 回 Data Core）；②量「3.1 底子 + 我們的資料」的上限；③給 SyncVision 更強的 teacher。
+**上傳照片／指定資料夾 → AI 導師先標一輪 → 人確認 → 存成資料集 → 微調 → 測試 → 匯出到 Orin**
 
-不在範圍：SyncVision（自訓模型，在 SyncAI-Lib-VisionTraining_Exp）；playground 的推論展示（SyncAI-App-VLMPlayground_Exp）。playground 的 `training/` 已搬到本 repo，playground 本身在 v1 不動、不加 adapter 切換。
+成功的樣子：在自己的工廠／倉儲影像上，微調後的 3.1 在 detect 與巡檢問答（有沒有人、有沒有戴安全帽／背心、出口有沒有被擋、門是否開、地上有無雜物、堆高機是否在動…）明顯贏過原版。內部使用（playground、機器人、之後當 SyncVision 的 teacher），不出貨。
 
-## 2. 命名與授權
+**v1 完成點**：用 ≥200 張審核過的圖訓出一個 adapter，在 CCTV held-out 的 detect 與 query 都 ≥ base，而且 ①→④ 全程在 UI 完成、不碰終端機。
 
-- 本 repo 是全公司命名規則的**特例**：程式、文件、commit 可以直接寫 Moondream 3.1。
-- **跨出 repo 的東西一律用 `syncvlm-*`**：adapter 名稱、manifest 欄位、報告、任何會進 playground 或 Data Core 的字串。
-- Repo 在 Paul 的個人帳號（PSheon），private。
-- **用途限內部 R&D**。微調出的 adapter 是上游 Model License 1.0 的 Derivative Model：**不出貨給客戶**。要不要部署到 playground／內網服務，等授權條款報告（`docs/license-report.md`，Claude 寫）交付後由 Paul 另決。在此之前權重只留 GB300 與 `gs://syncai-vlm-forge`。
-- VisionTraining `GOALS.md` §2 對應改為「3.1 微調移到 VLM-Forge，用途限內部 R&D」。
+## 2. 不做
 
-## 3. 範圍（v1）
+Data Core 匯出包、GCS、CI、`stage` 分支與 gate 儀式、PRO 6000 kestrel parity、RTSP 擷取（等有 NVR 連線資訊再談）、vLLM（列研究項目）、帳號／權限／指派、多 GPU、通用 benchmark、GGUF／量化匯出、RLHF、多模型抽象層。已寫的程式留著，不列目標。
+
+## 3. 模型與部署
 
 | 項目 | 決議 |
 | --- | --- |
-| skill | detect、point、query、caption 四種 |
-| 微調方式 | 只做 LoRA：單任務 adapter + 多任務合訓 adapter。Full fine-tune 等 LoRA 天花板有數據再開 |
-| 順序 | detect（工廠 CCTV 人與物件）→ point → query → caption → 多任務 |
-| 訓練底層 | 從 VisionTraining `src/syncvision/teacher/` vendor 的純 PyTorch 移植（含 `lora_train.py`），在 GB300 訓練與評估 |
-| PRO 6000 | 只做 kestrel 推論 parity（微調後權重在正式 engine 裡結果一致）；adapter 經 GCS 傳過去 |
+| 權重 | Hugging Face `moondream/moondream3.1-9B-A2B`（公開、不需登入），`model-cache/moondream31/`；tokenizer `moondream/starmie-v1` |
+| 推論與訓練底層 | `src/vlmforge/model/`：純 PyTorch 移植（vision／text／region／LoRA），GB300 可跑；base 在三套 held-out 的分數與 SyncVision 記錄的 SyncVLM 一致（detect 0.368／0.370） |
+| 部署目標 | **Orin AGX，用 Moondream 官方 Photon 跑 base + adapter**（kestrel 有 Jetson aarch64 kernel） |
+| adapter 格式 | 官方 `lora_state_dict` 版面（`dense.{i}.up_a/up_b/down_a/down_b`、`moe.{j}.*`，alpha/r 已折進 B），**只掛文字 MLP**，rank 8–32；**region head 預設不訓**（訓了就只能在 Forge 跑，是進階選項） |
+| 出題／比對模型 | Qwen3-VL-32B-Instruct（`model-cache/judge`），8 張一批 |
+| GPU | 與 SyncVision 共用 GB300：SyncVision 優先；Forge 訓練 ≤ 60 GB；一律 `numactl --membind=0` |
 
-## 4. 驗收（KPI）與 gate
+## 4. 資料集
 
-- Held-out 直接沿用 Data Core `syncvision-heldout-eval` v1.0.0，**與 SyncVision 共用同一套 KPI 定義**（macro：逐組算 F1／exact 再平均）：detect = CCTV 210 + CrowdHuman 500；query = people-posture 175。
-- 缺的 gold 由本 repo 的 UI 補：**point gold** 從 CrowdHuman 框中心點推導再人工校正；**caption gold** 由人在 UI 審核通過約 200 張 held-out 圖。做完登錄進 Data Core 成為 held-out release v1.1。
-- **Gate（進 stage 的條件）**：adapter 目標 skill 的 macro 分數 **≥ base**，且**其他三個 skill 退步 ≤ 1 個百分點**。不過就不進 stage。
-- 正式分數只算 Data Core tagged release；直讀路徑的結果只算探索。held-out 來源一律不進訓練。
+- **資料集是一等公民**：有名字（例如「工廠-1025」）、建立／更新時間，沒有版本號。
+- 圖可混來源、陸續加：上傳、拖曳、zip、GB300 資料夾路徑。held-out 的圖永遠不能進資料集。
+- **AI 導師兩種模式**：①自動出題（預設）——導師看圖決定物件（含框）、3–4 題一般問答（數量、是非、屬性、空間、動作）、2–3 題巡檢問答、一段 caption；②指定題目——資料集設定裡寫死要問的物件與問題，每張圖都問。
+- 學生（Moondream）答同一批題；比對：框用 IoU 配對、點看是否落在導師框內、文字比數字／是非／字串、caption 由 judge 查幻覺。一致→自動通過；不一致→人看。
+- 標籤：文字用導師的答案、框／點用學生的（學它自己的框風格）；人改過的以人為準。匯出 = 資料集的 `jsonl`（座標 0–1）＋圖 zip。
+- 每個資料集自動切 **10% 當驗證集**（不進訓練）。
 
-## 5. 微調規格
+## 5. 檢查（人）
 
-| 部分 | 決議 |
-| --- | --- |
-| LoRA 位置 | 語言模型 attention + MLP（含 MoE experts） |
-| rank | 起手 r=16、alpha=32；只在 detect 線掃一次 r ∈ {8, 16, 32}，之後固定 |
-| region head | 解碼側全參數可訓（`RegionHead`：layer norm + coordinate / size head，detect / point 的座標品質主要靠它）；輸入側的座標／尺寸 encoder 凍結 |
-| 視覺編碼器、projector | 凍結 |
-| replay | 自蒸餾 replay 必混（預設 0.5），否則 adapter 會塌到訓練答案 |
-| adapter 檔 | `<name>.pt`：`lora_state_dict`（engine 的 TextLoRA 版面，alpha/r 已折進 B）、`rank`、`alpha`、`region_head`（上游張量名）。kestrel parity 時 LoRA 直接載入，region head 要寫進一份 patch 過的 model 檔 |
+- **一次一題、每按一次就存**，看完一張自動換下一張。只看不一致的題；一致的題 Enter 帶過；全部一致的圖只抽 **10%／至少 20 張**。
+- 快捷鍵：`Enter`/`Space` 存並下一題、`Shift+Enter` 剩下全存、`D` 丟棄、`1` 用預標、`2` 用模型、`E` 改文字、`Z` 還原、`←/→` 換題、`N` 跳過這張、`G` 所有圖、`?` 說明。改過沒存要有明顯提示；存了要有提示。
+- **多人**：進站 dialog 填名字（記在瀏覽器，右上可改），每筆記名字與時間，認領後鎖 10 分鐘；不做帳號、權限、指派。
 
-## 6. UI
+## 6. 訓練
 
-- 技術：FastAPI + Vite/React（TypeScript），推論後端是 §3 的純 PyTorch 移植。
-- 部署：GB300 內網 **:8796**，不做登入；每筆修正記 reviewer 名字與時間；多人同審，每張圖認領後鎖 10 分鐘。
-- **版面＝工作流的四步（Paul 2026-10-23）**，不按工具分頁。每步一個畫面、一個主按鈕，首頁的步驟列顯示各步進度：
-  1. **資料**：貼一個 GB300 資料夾路徑 → 按「自動出題」→ 工具自己選圖、出題、作答、比對（進階選項收起來）。
-  2. **檢查**：逐張看圖，一張圖的題全部列出，不一致的在前；整張確認／改個別題／丟棄。
-  3. **訓練**：一個按鈕，只露名稱、步數、學習率；訓完自動在 held-out 評估並和 base 比。
-  4. **測試**：base vs 新模型的分數表、逐題看差異、單張試玩。
-- 畫面上的名詞只用「預標」「模型」「不一致（請你看）」「自動通過」「抽查」，不出現 judge／teacher／student／triage。
-- **自動出題（autogen，主要的資料飛輪）**：工具自己做完整條線——①從本機圖池抽圖（工作區擷取／上傳 + Data Core 可訓練 release；**不抓網路圖**，held-out 永遠不是圖池）；②teacher（= judge 模型）看一張圖一次產出：物件與框、3–4 題一般問答（數量、是非、屬性、空間、動作）、**2–3 題工業巡檢問答**（有沒有值班人員、有沒有戴安全帽／背心／口罩／手套、出口或滅火器有沒有被擋、門是否開、地上有無漏液雜物、堆高機是否在動、燈是否開、有無人進入管制區、有無物品無人看管；建佇列時可加主題）、一段 caption；③學生（Moondream）答同一批題；④對答案：框用 IoU 配對、點看是否落在 teacher 框內、文字比數字／是非／字串，caption 由 judge 查幻覺；一致 → accept，不一致 → fix；⑤**人逐張圖檢查**：一張圖的所有題一起看，fix 的題突出，可整張確認或改個別題；全部 accept 的圖只抽 max(20, 10%) 給人。標籤：文字用 teacher 的答案、框／點用學生的（region head 學它自己的框風格），人改過的以人為準。
-- **Judge（人類監督的前一層）**：佇列預測完後由本機的 **Qwen3-VL-32B-Instruct**（Apache-2.0，`model-cache/judge`，與 VisionTraining caption 抽審同一個模型）逐題審：detect/point 看畫了編號框的圖，回報錯框與漏框；query 判答案對錯；caption 列出圖裡不存在的片語。`accept` 的題離開人工佇列（status `auto`），只留 **max(20, 10%) 的抽查樣本**給人；`fix` 的題排在人工佇列最前面。Judge 永遠不寫 label：`auto` 匯出為 `machine_reviewed`（Data Core §7 的正式抽審在登錄時做），人審過的為 `human`。
-- 訓練由 UI 的按鈕啟動（`forge train` 仍可用）；一次只跑一個訓練。
+- UI 一顆按鈕；只露名稱、步數、學習率。預設 r=16、alpha=32、lr 2e-4、步數依資料量（≈ 每張圖 2 步，100–1000）、batch 8、replay 0.5、region head 關。預設值由 Claude 依實驗調整，不逐項問。
+- 訓完自動在 held-out 與驗證集評估、和 base 比；一次只跑一個訓練。
 
-## 7. 資料
+## 7. 測試
 
-- 只讀 Data Core tagged release（GB300 本機 `/home/paul/SyncAI-Data-Core-vlm`）；本 repo 不存資料，`data/` 只是 cache。held-out 的圖依 Data Core 規則不離開資料主機。
-- 人工修正先存本機工作區 `workspace/`（SQLite + 圖檔，gitignore）；`forge export` 匯成 Data Core `_incoming` 格式，由 Data Core 登錄、過 rules §7 後才成為 release。
-- **實驗 run 可以直接讀本機修正**快速迭代；**要打 tag 進 main 的 adapter 只能用 Data Core tagged release 訓練**。
-- 不訓練：任何 `machine_unreviewed`、`evaluation_only`、held-out 來源。
-- **CCTV 訓練資料**：GB300 上現有的 105 張工廠 CCTV 全部是 held-out（`factory-cctv-20260910`），不能訓練。detect 線的訓練資料來自**新擷取**的工廠 CCTV 畫面（`forge capture`，NVR 10.12.31.{6,8,9,12}，不同日期），經 UI 預標＋人工修正後登錄成新的 source + labels layer；held-out 的 2026-09-10／09-11 畫面永遠排除。同一批攝影機、不同時間：held-out 量的是「這些攝影機的畫面」，不是未見過的場域，報告如實註明。
+- **分數在 GB300 算**（④ 測試頁）：CCTV held-out（105 張／210 題，真考卷）＋每個資料集的驗證集；CrowdHuman 與機器狗 gold 只當參考。指標：detect／point F1 macro、query exact（數字、是非）、count MAE；顯示 base vs 新模型與差值，逐題看差異，單張試玩。
+- **Orin 只跑延遲腳本**：同一組圖，base vs adapter，每題毫秒；不重算分數。
+- ④ 提供「匯出到 Orin」：adapter 檔＋載入範例。
 
-## 8. 交付
+## 8. 介面
 
-- 每個 adapter 打包成 `adapters/<skill|multi>/<name>@<version>/`：safetensors + `manifest.yaml`（base 權重 sha、LoRA 設定、訓練用的 release tag、held-out 分數、git commit）。
-- 權重放 **`gs://syncai-vlm-forge`**（Paul 建）；GitHub release 只帶 manifest 與 sha256；git 裡不放權重。
+- 四步：**① 資料 → ② 檢查 → ③ 訓練 → ④ 測試**，每步一個畫面、一個主按鈕；首頁步驟列顯示各步進度。名詞只用「預標」「模型」「不一致（請你看）」「自動通過」「抽查」。
+- 桌機 1440 為主、平板可用、不做手機；跟系統深淺色；繁中。
+- 改版先出 HTML 可點稿給 Paul 確認，再改程式。
 
-## 9. 流程與基礎設施
+## 9. 工程規範
 
-- 分支：`feat/* → dev → stage → main`；PR 一律以 `dev` 為 base，不疊在 feat 分支上；進 `stage` 須通過 §4 gate 並附 eval report；`main` 只放打了 tag 的 adapter release。
-- CI（GitHub Actions）只跑 lint + 無 GPU 的單元測試。
-- 工具：`uv` + `pyproject.toml`；追蹤 `runs/<name>/`（log.jsonl、TensorBoard）。
-- **GB300 排程（SyncVision 優先）**：UI 推論隨時可跑（單模型約 20 GB）；Forge 訓練限 ≤ 60 GB 顯存，開跑前先量 SyncVision 的 step 速度，跑中若 SyncVision 變慢 > 10% 或 OOM，Forge 訓練暫停；一律 `numactl --membind=0`。
+- Python AI 專案最佳實踐：乾淨的分層（`model/` 純模型、`train.py`／`evaluate.py`／`autogen.py`／`judge.py` 各司其職、`server/` 只做 API 與工作區、`web/` 只做畫面）；每個模組有說明用途與資料格式的 docstring；公開函式有型別標註；`README.md` 能讓人從零跑起來；設定用 YAML、資料用 jsonl、座標一律 0–1。
+- 測試：CPU 可跑的單元測試涵蓋解析、比對、評分、API 流程（`uv run pytest`）；GPU 行為用小批次實測。
+- 分支：`feat/* → dev → main`，PR 以 `dev` 為 base。`uv` 管環境；`ruff` 格式與 lint。
 
-## 10. 里程碑與現況
+## 10. 現況（2026-10-23）
 
-| 里程碑 | 驗收 | 狀態 |
-| --- | --- | --- |
-| M1 detect 線跑通 | CCTV 210 張 held-out 上 base 分數；一個 detect adapter 訓完並過 gate；對照 UI 看得到 base vs adapter；adapter 打 tag、上傳 GCS | 進行中 |
-| M2 point | point gold（CrowdHuman 中心點 + 校正）→ adapter 過 gate | — |
-| M3 query | adapter 過 gate | — |
-| M4 caption | caption gold 200 張 → adapter 過 gate | — |
-| M5 多任務 | 單一 adapter 四 skill 全部不低於各自單任務 adapter − 1 pt | — |
-
-只在里程碑到點時通知 Paul。
-
-待 Paul：建 bucket `gs://syncai-vlm-forge`（M1 前）。
+- 已有：模型移植與 base 分數；自動出題（兩階段 teacher、批次）；一次一題的檢查頁；UI 訓練管線（訓→評→比）；④ 分數表／看差異／單張試玩；圖池 hydranet 300、LOCO 200（Data Core T1）。
+- 進行中：依本文件改成「資料集」為中心的介面（先出稿）；Photon 相容的 adapter 預設；驗證集切分；Orin 匯出。
+- 待 Paul：NVR RTSP 連線資訊（工廠 CCTV 新畫面）。
