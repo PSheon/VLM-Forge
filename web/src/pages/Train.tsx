@@ -19,7 +19,9 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   const [rank, setRank] = useState(16);
   const [regionHead, setRegionHead] = useState(false);
   const [askDel, setAskDel] = useState<string | null>(null);
-  const load = useCallback(() => { api.datasets().then((d) => { setDatasets(d.filter((x) => x.trainable > 0)); setPicked((p) => (p.length ? p : d.filter((x) => x.trainable > 0).map((x) => x.id))); }).catch(() => undefined); api.runs().then((r) => setRuns(r.runs)).catch(() => undefined); }, []);
+  // every dataset is listed; only those with confirmed questions can be ticked (all of them
+  // are, by default), so a new or still-labelling dataset is visible with the reason it is out
+  const load = useCallback(() => { api.datasets().then((d) => { setDatasets(d); setPicked((p) => (p.length ? p.filter((id) => d.some((x) => x.id === id && x.trainable > 0)) : d.filter((x) => x.trainable > 0).map((x) => x.id))); }).catch(() => undefined); api.runs().then((r) => setRuns(r.runs)).catch(() => undefined); }, []);
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
   const chosen = datasets.filter((d) => picked.includes(d.id));
   const rows = chosen.reduce((a, d) => a + d.trainable, 0);
@@ -49,9 +51,10 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
       <div className="col">
         <div className="panel col">
           <h3>訓練集</h3>
-          {datasets.length === 0 && <div className="muted hint">還沒有確認過的題。</div>}
+          <div className="muted hint">勾選要一起訓練的資料集（預設全勾）；只有確認過的題會進訓練，每個資料集的驗證集另外用來評分。</div>
+          {datasets.length === 0 && <div className="muted hint">還沒有資料集。</div>}
           {datasets.map((d) => (
-            <label key={d.id} className="row"><input type="checkbox" checked={picked.includes(d.id)} onChange={(ev) => setPicked(ev.target.checked ? [...picked, d.id] : picked.filter((x) => x !== d.id))} /> <b>{d.name}</b><span className="muted small">{d.trainable} 筆 · 驗證集 {d.val_images} 張{d.images_pending ? ` · 還有 ${d.images_pending} 張沒看` : ""}</span></label>
+            <label key={d.id} className="row" style={{ opacity: d.trainable > 0 ? 1 : 0.6 }}><input type="checkbox" disabled={d.trainable === 0} checked={picked.includes(d.id)} onChange={(ev) => setPicked(ev.target.checked ? [...picked, d.id] : picked.filter((x) => x !== d.id))} /> <b>{d.name}</b><span className="muted small">{d.trainable > 0 ? `${d.trainable} 筆 · ${d.trainable_images ?? 0} 張 · 驗證集 ${d.val_images} 張${d.images_pending ? ` · 還有 ${d.images_pending} 張沒看` : ""}` : d.batches?.[0]?.job?.state === "running" ? "標註中，還沒有確認的題" : d.items ? `還沒有確認的題（${d.images_pending} 張要看）` : "還沒標註"}</span></label>
           ))}
           <div className="small muted">合計 {rows} 筆 · {images} 張圖 · detect {bySkill.detect} · point {bySkill.point} · query {bySkill.query} · caption {bySkill.caption}</div>
           <div className="row">
