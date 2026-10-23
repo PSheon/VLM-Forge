@@ -1,53 +1,47 @@
-// ③ 測試 (docs/ui-spec §6): scores (base vs every run, held-out + val splits), per-item
-// diff, a single-image playground that can save into a dataset, and the Orin bundle.
+// ③ 測試 (docs/ui-spec §6): the scores are the page; 看差異 (per-item diff) and 試一張 (a
+// playground that can save into a dataset) are sub-views; the Orin bundle is a section in the
+// action column. Same pattern as the dataset page: no tab bar, ← / Esc goes back.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, defaultPrompt, emptyLabel, fmt, fmtDelta, phaseLabel, skillLabel, suiteLabel, summary, type Dataset, type HeldoutPair, type ImageRow, type Model, type Pred, type Run, type Skill } from "../api";
 import Canvas, { type View } from "../components/Canvas";
 import ImagePicker from "../components/ImagePicker";
 import TextDiff from "../components/TextDiff";
-import { Pill, useToast } from "../components/ui";
+import { PageHead, Pill, Section, useEscBack, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
 import type { Step } from "../App";
 
-type Tab = "scores" | "diff" | "play" | "orin";
+type Sub = "scores" | "diff" | "play";
 const SKILLS: Skill[] = ["detect", "point", "query", "caption"];
 
 export default function Test({ models, reviewer, go }: { models: Model[]; reviewer: string; go: (s: Step) => void }) {
-  const [tab, setTab] = useState<Tab>("scores");
+  const [view, setView] = useState<Sub>("scores");
   const [data, setData] = useState<{ suites: string[]; base: Record<string, Record<string, number>>; runs: Run[] } | null>(null);
   const [diff, setDiff] = useState<{ run: string; suite: string } | null>(null);
   const load = () => api.testSummary().then(setData).catch(() => undefined);
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
+  const back = useCallback(() => setView("scores"), []);
+  useEscBack(view !== "scores", back);
   const done = data?.runs.filter((r) => r.state === "done" && Object.keys(r.evals).length) ?? [];
   const running = data?.runs.find((r) => r.state === "running");
   const suites = Array.from(new Set([...(data?.suites ?? []), ...done.flatMap((r) => Object.keys(r.evals))]));
-  const tabs: [Tab, string, string][] = [["scores", "分數", ""], ["diff", "看差異", done.length ? "" : "要先有訓練好的模型"], ["play", "試一張", ""], ["orin", "匯出到 Orin", done.length ? "" : "要先有訓練好的模型"]];
-  const header = (
-    <>
-      <div className="row">
-        <h2>測試</h2>
-        {running ? <Pill kind="warn">{running.name} {running.phase === "training" ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : phaseLabel(running.phase)}</Pill> : done.length ? <Pill kind="ok">{done.length} 個模型可比</Pill> : <Pill kind="grey">還沒有訓練好的模型</Pill>}
-        <span className="muted hint">base＝原本的 Moondream；每個訓練好的模型都和它比</span>
-      </div>
-      <div className="tabs big">{tabs.map(([k, l, why]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)} disabled={!!why} title={why}>{l}</button>)}</div>
-    </>
-  );
+  const status = running ? <Pill kind="warn">{running.name} {running.phase === "training" ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : phaseLabel(running.phase)}</Pill> : done.length ? <Pill kind="ok">{done.length} 個模型可比</Pill> : <Pill kind="grey">還沒有訓練好的模型</Pill>;
+  const head = (title: string, hint: string) => <PageHead back={view === "scores" ? undefined : { label: "← 分數", onClick: back }} title={title}>{status}<span className="muted hint">{hint}</span></PageHead>;
   return (
-    <Fade k={tab}>
-      {tab === "scores" && data && <Scores header={header} data={data} done={done} running={running} suites={suites} go={go} onDiff={(run, suite) => { setDiff({ run, suite }); setTab("diff"); }} />}
-      {tab === "diff" && <Diff header={header} runs={done} suites={suites} initial={diff} />}
-      {tab === "play" && <Play header={header} models={models} reviewer={reviewer} />}
-      {tab === "orin" && <Orin header={header} runs={done} />}
-      {tab === "scores" && !data && <div className="page"><div className="col">{header}<div className="empty"><i className="spin" />載入中…</div></div><div className="actions" /></div>}
+    <Fade k={view}>
+      {view === "scores" && data && <Scores header={head("測試", "base＝原本的 Moondream；每個訓練好的模型都和它比")} data={data} done={done} running={running} suites={suites} go={go} onDiff={(run, suite) => { setDiff({ run, suite }); setView("diff"); }} onPlay={() => setView("play")} />}
+      {view === "diff" && <Diff header={head("看差異", "逐題比 base 和新模型")} runs={done} suites={suites} initial={diff} />}
+      {view === "play" && <Play header={head("試一張", "任何一張圖，問 base 和新模型")} models={models} reviewer={reviewer} />}
+      {view === "scores" && !data && <div className="page"><div className="col">{head("測試", "")}<div className="empty"><i className="spin" />載入中…</div></div><div className="actions" /></div>}
     </Fade>
   );
 }
 
 const suiteKind = (s: string): ["target" | "val" | "ref", string] => (s === "heldout-cctv" ? ["target", "v1 目標考卷"] : s.startsWith("val-") ? ["val", "你的資料集留下的 10%"] : ["ref", "參考，不當目標"]);
 
-function Scores({ header, data, done, running, suites, go, onDiff }: { header: ReactNode; data: { base: Record<string, Record<string, number>> }; done: Run[]; running?: Run; suites: string[]; go: (s: Step) => void; onDiff: (run: string, suite: string) => void }) {
+function Scores({ header, data, done, running, suites, go, onDiff, onPlay }: { header: ReactNode; data: { base: Record<string, Record<string, number>> }; done: Run[]; running?: Run; suites: string[]; go: (s: Step) => void; onDiff: (run: string, suite: string) => void; onPlay: () => void }) {
   const best = done[0];
+  const [orin, setOrin] = useState(false);
   return (
     <div className="page">
     <div className="col">
@@ -86,7 +80,8 @@ function Scores({ header, data, done, running, suites, go, onDiff }: { header: R
       {best ? <button className="primary big" onClick={() => onDiff(best.name, "heldout-cctv")}>看 {best.name} 的差異 →</button> : <button className="primary big" onClick={() => go("train")} disabled={!!running}>{running ? `${running.name} 訓練中…` : "去訓練 →"}</button>}
       <Pop show={!done.length} className="hint muted">{running ? `第 ${running.last?.step ?? 0}/${running.steps} 步；訓完自動在每張考卷評分，這裡會多一欄。` : "左邊是 base 的起點分數；訓一個模型後會多一欄。"}</Pop>
       {best?.gate && <div className={`hint ${best.gate.passed ? "ok" : "bad"}`}>{best.name}：{best.gate.passed ? "比 base 好（工廠 CCTV）" : "沒有比 base 好（工廠 CCTV）"}</div>}
-      <div className="hint muted">看差異＝逐題看 base 和新模型哪裡不同；試一張＝拿任何圖問兩個模型。</div>
+      <div className="row hint"><button className="ghost" onClick={onPlay}>試一張圖 →</button>{best && <button className="ghost" onClick={() => onDiff(best.name, "heldout-cctv")}>看差異 →</button>}</div>
+      {done.length > 0 && <Section title="匯出到 Orin" summary={`${done.length} 個模型可匯出`} open={orin} onToggle={() => setOrin(!orin)}><Orin runs={done} /></Section>}
     </div>
     </div>
   );
@@ -243,32 +238,25 @@ function Play({ header, models, reviewer }: { header: ReactNode; models: Model[]
 
 const short = (t: string) => (t.length > 26 ? t.slice(0, 26) + "…" : t);
 
-function Orin({ header, runs }: { header: ReactNode; runs: Run[] }) {
+function Orin({ runs }: { runs: Run[] }) {
   const [sel, setSel] = useState(runs[0]?.name ?? "");
+  const [code, setCode] = useState(false);
   const r = runs.find((x) => x.name === sel);
   return (
-    <div className="page">
-      <div className="col">
-      {header}
-      <div className="panel col">
-        <h3>在 Orin AGX 上用</h3>
-        <pre className="code">{`pip install moondream          # 帶 kestrel（Photon）
+    <>
+      <label className="f">模型<select value={sel} onChange={(e) => setSel(e.target.value)}>{runs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}</select></label>
+      {r && <div className="col hint"><Pill kind={r.region_head ? "warn" : "ok"}>{r.region_head ? "有 region head：Photon 載不了，只能在 Forge 跑" : "Photon 相容（只掛文字 MLP）"}</Pill><span className="muted">r{r.rank} · {r.rows} 筆 · {r.steps} 步</span></div>}
+      <a className="btn" href={r ? api.orinUrl(r.name) : "#"} aria-disabled={!r} style={{ textAlign: "center" }}>下載 adapter 包（zip）</a>
+      <div className="muted small">內含 adapter.pt、local_adapter.py、README.md、bench_orin.py、scores.json。官方 client 的 adapter 只認雲端 id，所以附 local_adapter.py 從本機檔載。</div>
+      <button className="ghost" onClick={() => setCode(!code)} style={{ alignSelf: "flex-start" }}>{code ? "收起用法" : "Orin 上怎麼用 ▾"}</button>
+      {code && <pre className="code" style={{ fontSize: 11 }}>{`pip install moondream   # 帶 kestrel
 from PIL import Image
 from local_adapter import Tuned
 m = Tuned("adapter.pt")
 img = Image.open("frame.jpg")
-m.detect(img, "person"); m.query(img, "Is anyone without a helmet?")
-m.base.detect(img, "person")   # 同一個 engine 跑 base 對照`}</pre>
-        <div className="muted hint">官方 client 的 adapter 只認雲端 id，所以包裡附 <code>local_adapter.py</code>（kestrel 的 AdapterProvider，從本機檔載）。Orin 上跑 <code>python bench_orin.py --images ./frames --adapter adapter.pt</code> 量延遲（base vs adapter，每題毫秒，寫到 bench.json）；分數不在 Orin 上算。</div>
-      </div>
-      <div className="panel col"><h3>分數（這個模型）</h3>{r && Object.entries(r.evals).map(([s, m]) => <div key={s} className="hint">{suiteLabel(s)}：{Object.entries(m).map(([k, v]) => `${k} ${fmt(v)}`).join(" · ")}</div>)}{r?.gate && <div className={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "比 base 好" : "沒有比 base 好"}</div>}</div>
-      </div>
-      <div className="actions">
-        <a className="btn primary big" href={r ? api.orinUrl(r.name) : "#"} aria-disabled={!r} style={{ textAlign: "center" }}>下載 adapter 包</a>
-        <label className="f">模型<select value={sel} onChange={(e) => setSel(e.target.value)}>{runs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}</select></label>
-        {r && <div className="col hint"><Pill kind={r.region_head ? "warn" : "ok"}>{r.region_head ? "有 region head：Photon 載不了，只能在 Forge 跑" : "Photon 相容（只掛文字 MLP）"}</Pill><span className="muted">r{r.rank} · {r.rows} 筆 · {r.steps} 步</span></div>}
-        <div className="muted hint">zip 內：adapter.pt、local_adapter.py、README.md、bench_orin.py、scores.json</div>
-      </div>
-    </div>
+m.detect(img, "person")
+m.base.detect(img, "person")  # base 對照
+# 延遲：python bench_orin.py --images ./frames`}</pre>}
+    </>
   );
 }

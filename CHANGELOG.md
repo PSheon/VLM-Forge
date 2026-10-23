@@ -1,0 +1,34 @@
+# Changelog
+
+All notable changes to VLM-Forge. Versions follow [SemVer](https://semver.org/); dates are when the version reached `main`.
+
+## [0.2.0] — 2026-10-23
+
+Review is the bottleneck, so this release is about looking at fewer questions, faster.
+
+### Added
+- **Per-question triage.** Agreed questions leave the human queue even inside images that have disagreements (10 % / ≥ 20 spot sample). On a 120-image warehouse set: 1 469 questions to look at instead of 2 813. `POST /api/queues/{id}/triage` re-runs it on an existing batch.
+- **Quick answers.** Yes/no questions save on `Y` / `N`; count questions take digits and `↑↓`.
+- **Focus zoom.** Spatial questions zoom to the union of pre-label and model boxes; `F` = whole image. The canvas follows the image's aspect ratio (no letterbox).
+- **Pre-label coverage.** A pre-label box turns green ✓ once the answer covers it; a point outside every box is red.
+- **Detect → point sync.** Saving a detect question can save the matching point question too (one point per box centre, on by default, `P` toggles, undo in the toast).
+- **Point editing.** 24 px grab area, numbered points, `3` adds a point at every uncovered pre-label box (detect: adds missing boxes), `Backspace` removes the last point/box.
+- **Key bar.** A sticky line of the keys that work on the current question; the key you press lights up.
+- **Question list** for the current image in the review column; click to jump.
+- **Synced views.** 看差異 and 試一張 zoom and pan both canvases together.
+- **Train page** rebuilt as ① pick datasets (cards with confirmed counts and skill bars) → ② settings → history, with a "what this run will train" summary next to the button.
+
+### Changed
+- **One design language on every page:** content left, a 400 px action column right whose first element is the page's only primary button; no tab bars; sub-views (review, diff, playground) open from the content and go back with `←` or `Esc`; settings, export and the Orin bundle are collapsible sections in the action column. Shared `PageHead`, `Section`, `useEscBack` in `web/src/components/ui.tsx`.
+- Skip image is `S` (`N` is "no").
+- The train page lists every dataset; ones without confirmed questions are greyed with the reason.
+
+### Fixed
+- Primary buttons now sit at the same height on every page.
+
+## [0.1.0] — 2026-10-23
+
+First version that runs data → review → train → test entirely in the UI: datasets with an AI-teacher labelling flywheel (Qwen3-VL-32B, 8B fallback), one-question-at-a-time review, LoRA training on Moondream 3.1's text MLPs (Photon-compatible), held-out scoring and gate, item-by-item diff, playground, Orin bundle with a local adapter loader, resumable labelling batches, motion and robust image loading.
+
+[0.2.0]: https://github.com/PSheon/VLM-Forge/releases/tag/v0.2.0
+[0.1.0]: https://github.com/PSheon/VLM-Forge/releases/tag/v0.1.0

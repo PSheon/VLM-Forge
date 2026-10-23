@@ -222,3 +222,41 @@ input.count { width: 110px; font-size: 24px; text-align: center; font-family: va
 .qlist .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qlist .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--line); }
 .qlist .dot.fix { background: var(--bad); border-radius: 2px; } .qlist .dot.acc { background: var(--ok); } .qlist .dot.none { background: var(--muted); transform: rotate(45deg) scale(.8); border-radius: 2px; } .qlist .dot.done { background: var(--line); }
+
+/* pre-label coverage: green once the answer covers the box; a point outside every box is red */
+.cv-stage .bx.alt.cov { border-color: var(--ok); }
+.cv-stage .bx.alt.cov .tag.alt { background: var(--ok); }
+.cv-stage .pt.out::before { background: var(--bad); }
+label.sync { background: var(--acc-soft); border-radius: 6px; padding: 5px 8px; }
+
+/* ② 訓練: dataset picker cards, the run summary, skill mix bars */
+.ds-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.ds-pick .card { gap: 6px; }
+.ds-pick .card.on { border-color: var(--acc); background: var(--acc-soft); }
+.ds-pick .card.off { opacity: .55; cursor: default; }
+.ds-pick .card.off:hover { transform: none; box-shadow: none; border-color: var(--line); }
+.step-h { display: flex; align-items: baseline; gap: 8px; }
+.step-h .n { font: 700 12px/1 var(--mono); color: var(--acc-fg); background: var(--acc); border-radius: 999px; padding: 3px 7px; }
+.mix { display: grid; grid-template-columns: 56px minmax(0, 1fr) 44px; gap: 4px 8px; align-items: center; font-size: 12px; }
+.mix .b { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.mix .b i { display: block; height: 100%; background: var(--acc); }
+.mix .v { text-align: right; font-family: var(--mono); color: var(--muted); }
+.mix .low .v, .mix .low span:first-child { color: var(--warn); }
+.summary dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+.summary dt { color: var(--muted); } .summary dd { margin: 0; font-family: var(--mono); }
+.history .it { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.history .it:last-child { border-bottom: none; }
+.history .it.cur { background: var(--acc-soft); }
+
+/* collapsible blocks in the action column (dataset settings, export) */
+.section { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.section.open { border-color: var(--muted); }
+.section-h { display: flex; width: 100%; align-items: baseline; gap: 8px; border: none; background: transparent; padding: 10px 12px; text-align: left; white-space: normal; }
+.section-h .small { flex: 1; min-width: 0; }
+.section-h .chev { color: var(--muted); }
+.section-b { padding: 0 12px 12px; }
+
+/* page title row: same height on every page, so the left content starts level too */
+.page-head { min-height: 38px; gap: 10px; }
+.page-head h2 { display: flex; align-items: center; gap: 4px; }
+.page-head .back { padding-left: 0; }
