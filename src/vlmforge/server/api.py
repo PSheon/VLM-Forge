@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from .. import __version__, paths
 from .export import export_incoming, export_train
+from .pipeline import DEFAULT_LR, DEFAULT_STEPS, Pipeline, default_name
 from .workspace import SKILLS, Workspace
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
@@ -78,6 +79,27 @@ class AutoQueueIn(BaseModel):
 class ImageReviewIn(BaseModel):
     reviewer: str
     items: list[dict]  # {"id", "action": approve|correct|discard, "label"?}
+
+
+class DataScanIn(BaseModel):
+    dir: str
+    limit: int | None = None
+
+
+class DataAutogenIn(BaseModel):
+    source: str
+    n_images: int | None = None  # default: every image of the source
+    skills: list[str] = ["detect", "point", "query", "caption"]
+    topics: list[str] = []
+    focus: str = ""
+    model: str = "base"
+
+
+class TrainIn(BaseModel):
+    name: str | None = None
+    steps: int = DEFAULT_STEPS
+    lr: float = DEFAULT_LR
+    rank: int = 16
 
 
 class JudgeIn(BaseModel):
@@ -512,6 +534,123 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             except (KeyError, ValueError) as e:
                 raise HTTPException(422, f"item {d.get('id')}: {e}") from e
         return out
+
+    # ------------------------------------------------------------------ the four steps
+    pipeline = Pipeline(ws)
+
+    @app.post("/api/data/scan")
+    def data_scan(body: DataScanIn):
+        """① a folder on this machine becomes a data source named after it."""
+        d = Path(body.dir).expanduser()
+        if not d.is_dir():
+            raise HTTPException(404, f"{d} 不是目錄")
+        name = d.name
+        if name.startswith("heldout"):
+            raise HTTPException(422, "held-out 資料夾不能當訓練來源")
+        r = scan(ScanIn(dir=str(d), source=name, limit=body.limit))
+        return {"source": name, **r}
+
+    @app.post("/api/data/autogen")
+    def data_autogen(body: DataAutogenIn):
+        """① run the whole generate -> answer -> compare chain on a source."""
+        n = body.n_images or len(ws.images(body.source, 100000))
+        qname = f"{body.source}-{time.strftime('%m%d-%H%M')}"
+        return create_auto_queue(
+            AutoQueueIn(
+                name=qname,
+                sources=[body.source],
+                n_images=n,
+                skills=body.skills,
+                topics=body.topics,
+                focus=body.focus,
+                model=body.model,
+            )
+        )
+
+    @app.get("/api/review/summary")
+    def review_summary():
+        return {
+            **ws.review_summary(),
+            "batches": [{**q, "job": jobs.get(q["id"])} for q in ws.queues()],
+            "sources": ws.sources(),
+        }
+
+    @app.get("/api/review/next-image")
+    def review_next_image(reviewer: str, after: str | None = None):
+        r = ws.claim_next_image(None, reviewer, after)
+        if r is None:
+            return {}
+        image, items = r
+        return {"image": image, "items": items}
+
+    @app.get("/api/review/images")
+    def review_images(status: str = "pending"):
+        """Images with items in ``status`` (pending | auto | reviewed), newest batch first."""
+        rows = ws.db.execute(
+            "select image_id, count(*) n, sum(status = 'pending') pending,"
+            " sum(verdict = 'fix' and status = 'pending') fix, max(spot) spot,"
+            " sum(status = 'auto') auto, max(queue_id) queue_id"
+            " from items group by image_id order by queue_id desc, min(id)"
+        ).fetchall()
+        out = [dict(r) for r in rows]
+        if status == "pending":
+            out = [r for r in out if r["pending"]]
+        elif status == "auto":
+            out = [r for r in out if r["auto"] == r["n"]]
+        elif status == "reviewed":
+            out = [r for r in out if not r["pending"] and r["auto"] != r["n"]]
+        return out
+
+    @app.get("/api/review/image/{image_id}")
+    def review_image_get(image_id: str):
+        im = ws.image(image_id)
+        if im is None:
+            raise HTTPException(404)
+        return {"image": im, "items": ws.items_for_image(image_id)}
+
+    @app.post("/api/review/image")
+    def review_image_post(body: ImageReviewIn):
+        out = []
+        for d in body.items:
+            try:
+                out.append(
+                    ws.review(
+                        int(d["id"]), d.get("action", "approve"), body.reviewer, d.get("label")
+                    )
+                )
+            except (KeyError, ValueError) as e:
+                raise HTTPException(422, f"item {d.get('id')}: {e}") from e
+        return out
+
+    @app.post("/api/train")
+    def train_start(body: TrainIn):
+        """③ train on everything reviewed so far, then evaluate and gate."""
+        try:
+            return pipeline.start(body.name or default_name(), body.steps, body.lr, body.rank)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e)) from e
+
+    @app.get("/api/train")
+    def train_list():
+        return {"runs": pipeline.list(), "trainable": ws.review_summary()["trainable"]}
+
+    @app.get("/api/train/{name}")
+    def train_status(name: str):
+        st = pipeline.status(name)
+        if st is None:
+            raise HTTPException(404)
+        return st
+
+    @app.get("/api/test/summary")
+    def test_summary():
+        """④ base vs every adapter on the held-out suites, plus the gate verdict."""
+        base = {}
+        for s in paths.HELDOUT_SUITES:
+            p = paths.BASELINES / f"base-{s}.json"
+            if p.exists():
+                m = json.loads(p.read_text())["metrics"]
+                base[s] = {k.split("/")[0]: v for k, v in m.items() if k.endswith("/macro")}
+        return {"suites": list(paths.HELDOUT_SUITES), "base": base, "runs": pipeline.list()}
 
     @app.get("/api/queues")
     def queues():

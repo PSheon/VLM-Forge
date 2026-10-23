@@ -373,17 +373,18 @@ class Workspace:
             self.db.commit()
         return {"images": len(by_img), "clean": len(clean), "spot": len(spot), "auto": n_auto}
 
-    def claim_next_image(self, queue_id: int, reviewer: str, after_image: str | None = None):
-        """The next image with pending items (images holding a ``fix`` first); every pending
-        item of it is claimed for the reviewer. Returns (image, items) or None."""
+    def claim_next_image(self, queue_id: int | None, reviewer: str, after_image: str | None = None):
+        """The next image with pending items (images holding a ``fix`` first; ``queue_id``
+        None = any batch); every pending item of it is claimed for the reviewer. Returns
+        (image, items) or None."""
         with self.lock:
             cutoff = time.time() - CLAIM_MINUTES * 60
             rows = self.db.execute(
                 "select image_id, max(verdict = 'fix') fix, min(id) first_id,"
                 " max(claimed_by is not null and claimed_by != ? and claimed_at >= ?) taken"
-                " from items where queue_id = ? and status = 'pending' group by image_id"
-                " order by fix desc, first_id",
-                (reviewer, cutoff, queue_id),
+                " from items where (? is null or queue_id = ?) and status = 'pending'"
+                " group by image_id order by fix desc, first_id",
+                (reviewer, cutoff, queue_id, queue_id),
             ).fetchall()
             pick = None
             seen_after = after_image is None
@@ -401,12 +402,34 @@ class Workspace:
                 return None
             self.db.execute(
                 "update items set claimed_by = ?, claimed_at = ?"
-                " where queue_id = ? and image_id = ? and status = 'pending'",
-                (reviewer, time.time(), queue_id, pick),
+                " where (? is null or queue_id = ?) and image_id = ? and status = 'pending'",
+                (reviewer, time.time(), queue_id, queue_id, pick),
             )
             self.db.commit()
-        items = [it for it in self.items(queue_id) if it["image_id"] == pick]
-        return self.image(pick), items
+        return self.image(pick), self.items_for_image(pick, queue_id)
+
+    def items_for_image(self, image_id: str, queue_id: int | None = None) -> list[dict]:
+        q = (
+            "select items.*, images.path, images.width, images.height, images.source"
+            " from items join images on images.id = items.image_id"
+            " where image_id = ? and (? is null or queue_id = ?) order by items.id"
+        )
+        return [self._item(r) for r in self.db.execute(q, (image_id, queue_id, queue_id))]
+
+    def review_summary(self) -> dict:
+        """Where the data stands, across every batch (the four-step UI's header numbers)."""
+        r = self.db.execute(
+            "select count(distinct image_id) images, count(*) items,"
+            " count(distinct case when status = 'pending' then image_id end) images_pending,"
+            " count(distinct case when status = 'pending' and verdict = 'fix' then image_id end)"
+            " images_fix,"
+            " sum(status = 'pending') pending, sum(status = 'auto') auto,"
+            " sum(status in ('approved', 'corrected')) reviewed,"
+            " sum(status = 'discarded') discarded from items"
+        ).fetchone()
+        out = dict(r)
+        out["trainable"] = (out["auto"] or 0) + (out["reviewed"] or 0)
+        return out
 
     def claim_next(self, queue_id: int, reviewer: str, after: int | None = None) -> dict | None:
         """The next pending item nobody else holds (claims expire after CLAIM_MINUTES): the

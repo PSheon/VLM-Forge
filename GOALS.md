@@ -51,14 +51,15 @@ VLM-Forge 是 **Moondream 3.1 微調的唯一家**：detect / point / query / ca
 
 - 技術：FastAPI + Vite/React（TypeScript），推論後端是 §3 的純 PyTorch 移植。
 - 部署：GB300 內網 **:8796**，不做登入；每筆修正記 reviewer 名字與時間；多人同審，每張圖認領後鎖 10 分鐘。
+- **版面＝工作流的四步（Paul 2026-10-23）**，不按工具分頁。每步一個畫面、一個主按鈕，首頁的步驟列顯示各步進度：
+  1. **資料**：貼一個 GB300 資料夾路徑 → 按「自動出題」→ 工具自己選圖、出題、作答、比對（進階選項收起來）。
+  2. **檢查**：逐張看圖，一張圖的題全部列出，不一致的在前；整張確認／改個別題／丟棄。
+  3. **訓練**：一個按鈕，只露名稱、步數、學習率；訓完自動在 held-out 評估並和 base 比。
+  4. **測試**：base vs 新模型的分數表、逐題看差異、單張試玩。
+- 畫面上的名詞只用「預標」「模型」「不一致（請你看）」「自動通過」「抽查」，不出現 judge／teacher／student／triage。
 - **自動出題（autogen，主要的資料飛輪）**：工具自己做完整條線——①從本機圖池抽圖（工作區擷取／上傳 + Data Core 可訓練 release；**不抓網路圖**，held-out 永遠不是圖池）；②teacher（= judge 模型）看一張圖一次產出：物件與框、3–4 題一般問答（數量、是非、屬性、空間、動作）、**2–3 題工業巡檢問答**（有沒有值班人員、有沒有戴安全帽／背心／口罩／手套、出口或滅火器有沒有被擋、門是否開、地上有無漏液雜物、堆高機是否在動、燈是否開、有無人進入管制區、有無物品無人看管；建佇列時可加主題）、一段 caption；③學生（Moondream）答同一批題；④對答案：框用 IoU 配對、點看是否落在 teacher 框內、文字比數字／是非／字串，caption 由 judge 查幻覺；一致 → accept，不一致 → fix；⑤**人逐張圖檢查**：一張圖的所有題一起看，fix 的題突出，可整張確認或改個別題；全部 accept 的圖只抽 max(20, 10%) 給人。標籤：文字用 teacher 的答案、框／點用學生的（region head 學它自己的框風格），人改過的以人為準。
 - **Judge（人類監督的前一層）**：佇列預測完後由本機的 **Qwen3-VL-32B-Instruct**（Apache-2.0，`model-cache/judge`，與 VisionTraining caption 抽審同一個模型）逐題審：detect/point 看畫了編號框的圖，回報錯框與漏框；query 判答案對錯；caption 列出圖裡不存在的片語。`accept` 的題離開人工佇列（status `auto`），只留 **max(20, 10%) 的抽查樣本**給人；`fix` 的題排在人工佇列最前面。Judge 永遠不寫 label：`auto` 匯出為 `machine_reviewed`（Data Core §7 的正式抽審在登錄時做），人審過的為 `human`。
-- v1 四塊：
-  1. **工作台**：選圖或上傳 → 選 skill 與模型（base 或任一 adapter）→ 直接拖框、移點、改文字 → 存成 gold 或訓練樣本。
-  2. **審核佇列**：對一個資料集批次跑預測，人逐張通過／修正／丟棄，鍵盤快捷鍵。
-  3. **對照**：同一張圖 base vs adapter 並排，框／點標差異，文字 diff。
-  4. **Runs／adapter 清單**：訓練 run、loss 曲線（UI 從 `runs/<name>/log.jsonl` 自繪）、held-out 分數、目前載入的 adapter。
-- 訓練的啟動留在 CLI，UI 不做「按鈕開訓練」。
+- 訓練由 UI 的按鈕啟動（`forge train` 仍可用）；一次只跑一個訓練。
 
 ## 7. 資料
 
