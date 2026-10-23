@@ -260,3 +260,74 @@ def auto_label(skill: str, pred: dict | None, teacher: dict) -> dict:
     if skill == "detect":
         return {"boxes": (pred or {}).get("boxes") or teacher.get("boxes") or []}
     return {"points": (pred or {}).get("points") or teacher.get("points") or []}
+
+
+# ---------------------------------------------------------------------- fixed prompts
+FIXED_PROMPT = """Answer about this image. Answer with JSON only, exactly this shape:
+{{"objects": [{{"name": "<name as given>", "count": <number visible>}}, ...],
+ "questions": [{{"q": "<question as given>", "a": "<short answer>"}}, ...],
+ "caption": "<one or two factual sentences, or an empty string if no caption was asked>"}}
+
+Objects to count (every clearly visible instance; 0 if none): {objects}
+Questions (answer each; counts as a digit, yes/no as yes or no, at most 5 words): {questions}
+Caption asked: {caption}
+Only state what is clearly visible."""
+
+
+def parse_fixed(text: str) -> dict[str, list[str]]:
+    """``detect: person, helmet`` / ``point: person`` / ``query: ...`` / ``caption: normal``
+    lines -> {"detect": [...], "point": [...], "query": [...], "caption": [...]}."""
+    out: dict[str, list[str]] = {"detect": [], "point": [], "query": [], "caption": []}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        skill, _, rest = line.partition(":")
+        skill = skill.strip().lower()
+        if skill not in out:
+            continue
+        if skill in ("detect", "point"):
+            out[skill] += [x.strip().lower() for x in rest.split(",") if x.strip()]
+        elif skill == "query":
+            out[skill].append(rest.strip())
+        else:
+            out[skill] += [x.strip().lower() for x in rest.split(",") if x.strip()] or ["normal"]
+    for k in out:
+        out[k] = list(dict.fromkeys(out[k]))
+    return out
+
+
+def fixed_prompt(fixed: dict[str, list[str]]) -> str:
+    objs = sorted(set(fixed.get("detect", [])) | set(fixed.get("point", [])))
+    return FIXED_PROMPT.format(
+        objects=", ".join(objs) or "(none)",
+        questions=" | ".join(fixed.get("query", [])) or "(none)",
+        caption="yes" if fixed.get("caption") else "no",
+    )
+
+
+def items_from_fixed(t: dict, fixed: dict[str, list[str]]) -> list[dict]:
+    """Teacher answers to the fixed prompts -> items; detect / point items exist for every
+    asked object (a count of 0 is a negative example with no boxes)."""
+    by_name = {o["name"]: o for o in t.get("objects", [])}
+    out = []
+    for name in fixed.get("detect", []):
+        o = by_name.get(name, {"boxes": []})
+        if o.get("skipped"):
+            continue
+        out.append({"skill": "detect", "prompt": name, "teacher": {"boxes": o.get("boxes", [])}})
+    for name in fixed.get("point", []):
+        o = by_name.get(name, {"boxes": []})
+        if o.get("skipped"):
+            continue
+        boxes = o.get("boxes", [])
+        pts = [[round((b[0] + b[2]) / 2, 4), round((b[1] + b[3]) / 2, 4)] for b in boxes]
+        out.append({"skill": "point", "prompt": name, "teacher": {"points": pts, "boxes": boxes}})
+    answers = {q["q"]: q["a"] for q in t.get("questions", [])}
+    for q in fixed.get("query", []):
+        if q in answers:
+            out.append({"skill": "query", "prompt": q, "teacher": {"text": answers[q]}})
+    for length in fixed.get("caption", []):
+        if t.get("caption"):
+            out.append({"skill": "caption", "prompt": length, "teacher": {"text": t["caption"]}})
+    return out

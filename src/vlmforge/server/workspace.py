@@ -30,6 +30,7 @@ from PIL import Image
 
 CLAIM_MINUTES = 10
 SKILLS = ("detect", "point", "query", "caption")
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 STATUSES = ("pending", "auto", "approved", "corrected", "discarded")
 SPOT_FRAC, SPOT_MIN = 0.1, 20  # judge-accepted items a human still sees (per queue)
 # columns added after the first schema; (table, column, type) applied with ALTER TABLE

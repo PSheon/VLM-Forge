@@ -210,6 +210,20 @@ class Judge:
     def generate(self, image_path: str, focus: str = "", topics: list[str] | None = None) -> dict:
         return self.generate_batch([image_path], focus, topics)[0]
 
+    def fixed_batch(self, image_paths: list[str], fixed: dict) -> list[dict]:
+        """Teacher answers to a dataset's fixed prompts (``vlmforge.autogen.parse_fixed``),
+        then the same grounding calls as ``generate_batch``."""
+        from .autogen import fixed_prompt, parse_teacher
+
+        images = [render(Image.open(p), {}) for p in image_paths]
+        raws = self.ask_batch([(im, fixed_prompt(fixed)) for im in images])
+        out = [parse_teacher(r) for r in raws]
+        for t, r in zip(out, raws, strict=True):
+            t["raw"] = r[:2000]
+            t["model"] = Path(self.model_dir).resolve().name
+        self._ground(images, out)
+        return out
+
     def generate_batch(
         self, image_paths: list[str], focus: str = "", topics: list[str] | None = None
     ) -> list[dict]:
@@ -217,28 +231,31 @@ class Judge:
         names + counts, questions and caption, then the grounding prompts of every image
         batched together (long box lists made the 32B model loop, so one short call per
         object type). Types with more than MAX_INSTANCES instances are not boxed."""
-        from .autogen import (
-            MAX_INSTANCES,
-            ground_prompt,
-            parse_boxes,
-            parse_teacher,
-            teacher_prompt,
-        )
+        from .autogen import parse_teacher, teacher_prompt
 
         images = [render(Image.open(p), {}) for p in image_paths]
         raws = self.ask_batch([(im, teacher_prompt(focus, topics)) for im in images])
         out = []
-        asks: list[tuple[int, dict]] = []
-        for i, raw_text in enumerate(raws):
+        for raw_text in raws:
             t = parse_teacher(raw_text)
+            t["raw"] = raw_text[:2000]
+            t["model"] = Path(self.model_dir).resolve().name
+            out.append(t)
+        self._ground(images, out)
+        return out
+
+    def _ground(self, images: list, teachers: list[dict]) -> None:
+        """One short grounding call per (image, object type), batched 8 at a time; types with
+        more than MAX_INSTANCES instances are marked ``skipped`` instead."""
+        from .autogen import MAX_INSTANCES, ground_prompt, parse_boxes
+
+        asks: list[tuple[int, dict]] = []
+        for i, t in enumerate(teachers):
             for o in t["objects"]:
                 if o["count"] > MAX_INSTANCES:
                     o["skipped"] = True
                 elif o["count"] > 0 and not o["boxes"]:
                     asks.append((i, o))
-            t["raw"] = raw_text[:2000]
-            t["model"] = Path(self.model_dir).resolve().name
-            out.append(t)
         for k in range(0, len(asks), 8):
             chunk = asks[k : k + 8]
             answers = self.ask_batch(
@@ -246,7 +263,6 @@ class Judge:
             )
             for (_, o), a in zip(chunk, answers, strict=True):
                 o["boxes"] = parse_boxes(a)
-        return out
 
     def judge(self, image_path: str, skill: str, prompt: str, pred: dict) -> dict:
         image = Image.open(image_path)

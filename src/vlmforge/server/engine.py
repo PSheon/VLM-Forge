@@ -70,6 +70,9 @@ class Engine:
     def teacher_generate_batch(self, image_paths: list[str], focus: str = "", topics=None):
         return self.submit(lambda j: j.generate_batch(image_paths, focus, topics), "judge").result()
 
+    def teacher_fixed_batch(self, image_paths: list[str], fixed: dict) -> list[dict]:
+        return self.submit(lambda j: j.fixed_batch(image_paths, fixed), "judge").result()
+
     def judge_items(self, items: list[dict]) -> list[dict]:
         """Verdicts for ``items`` (``path``, ``skill``, ``prompt``, ``pred``), on the worker."""
 

@@ -19,11 +19,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import __version__, paths
+from ..orin import make_bundle
+from .datasets import DatasetStore
 from .export import export_incoming, export_train
 from .pipeline import DEFAULT_LR, DEFAULT_STEPS, Pipeline, default_name
-from .workspace import SKILLS, Workspace
+from .workspace import IMAGE_EXT, SKILLS, Workspace
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 GEN_BATCH = 8  # images per teacher call (GPU throughput; the 32B judge is the slow part)
 
 
@@ -101,6 +102,24 @@ class TrainIn(BaseModel):
     steps: int = DEFAULT_STEPS
     lr: float = DEFAULT_LR
     rank: int = 16
+    dataset_ids: list[int] = []  # empty = everything reviewed in the workspace
+    region_head: bool = False  # True breaks Photon loading (GOALS §3)
+
+
+class DatasetIn(BaseModel):
+    name: str
+    config: dict = {}
+    note: str = ""
+
+
+class DatasetUpdateIn(BaseModel):
+    name: str | None = None
+    config: dict | None = None
+
+
+class FolderIn(BaseModel):
+    dir: str
+    limit: int | None = None
 
 
 class JudgeIn(BaseModel):
@@ -435,8 +454,12 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
 
         job = jobs[qid]
         try:
+            from ..autogen import items_from_fixed, parse_fixed
+
             skills = set(cfg["skills"])
             images = cfg["image_ids"]
+            mode = cfg.get("mode", "auto")  # auto | fixed | both
+            fixed = parse_fixed(cfg.get("fixed", "")) if mode in ("fixed", "both") else None
             job["phase"], job["total"], job["done"] = "generating", len(images), 0
             job["started"] = time.time()
             for k in range(0, len(images), GEN_BATCH):
@@ -445,9 +468,24 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                     return
                 chunk = images[k : k + GEN_BATCH]
                 paths_ = [ws.image(i)["path"] for i in chunk]
-                ts = engine.teacher_generate_batch(paths_, cfg.get("focus", ""), cfg.get("topics"))
-                for image_id, t in zip(chunk, ts, strict=True):
-                    for it in items_from_teacher(t, skills):
+                per_image: list[list[dict]] = [[] for _ in chunk]
+                if mode in ("auto", "both"):
+                    ts = engine.teacher_generate_batch(
+                        paths_, cfg.get("focus", ""), cfg.get("topics")
+                    )
+                    for j, t in enumerate(ts):
+                        per_image[j] += items_from_teacher(t, skills)
+                if fixed and any(fixed.values()):
+                    ts = engine.teacher_fixed_batch(paths_, fixed)
+                    for j, t in enumerate(ts):
+                        per_image[j] += items_from_fixed(t, fixed)
+                for image_id, its in zip(chunk, per_image, strict=True):
+                    seen: set[tuple[str, str]] = set()
+                    for it in its:
+                        key = (it["skill"], it["prompt"])
+                        if key in seen:
+                            continue
+                        seen.add(key)
                         ws.add_item(
                             image_id,
                             it["skill"],
@@ -648,13 +686,140 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                 raise HTTPException(422, f"item {d.get('id')}: {e}") from e
         return out
 
+    # ------------------------------------------------------------------ datasets (GOALS §4)
+    store = DatasetStore(ws)
+
+    @app.get("/api/datasets")
+    def datasets():
+        return store.list()
+
+    @app.post("/api/datasets")
+    def dataset_create(body: DatasetIn):
+        try:
+            return store.create(body.name, body.config, body.note)
+        except Exception as e:  # noqa: BLE001 - duplicate / blank name
+            raise HTTPException(409, f"建不了：{e}") from e
+
+    @app.get("/api/datasets/{ds_id}")
+    def dataset_get(ds_id: int):
+        try:
+            d = store.get(ds_id)
+        except KeyError as e:
+            raise HTTPException(404) from e
+        d["batches"] = [
+            {**q, "job": jobs.get(q["id"])} for q in ws.queues() if q.get("dataset_id") == ds_id
+        ]
+        d["unlabelled"] = len(store.unlabelled_image_ids(ds_id))
+        return d
+
+    @app.post("/api/datasets/{ds_id}")
+    def dataset_update(ds_id: int, body: DatasetUpdateIn):
+        return store.update(ds_id, body.config, body.name)
+
+    @app.delete("/api/datasets/{ds_id}")
+    def dataset_delete(ds_id: int):
+        store.delete(ds_id)
+        return {"ok": True}
+
+    @app.get("/api/datasets/{ds_id}/images")
+    def dataset_images(ds_id: int, split: str | None = None):
+        return [ws.image(i) for i in store.image_ids(ds_id, split)]
+
+    @app.post("/api/datasets/{ds_id}/upload")
+    async def dataset_upload(ds_id: int, file: UploadFile):
+        data = await file.read()
+        ids = store.add_bytes(ds_id, data, file.filename or "upload.jpg")
+        return {"added": len(ids), "image_ids": ids}
+
+    @app.post("/api/datasets/{ds_id}/folder")
+    def dataset_folder(ds_id: int, body: FolderIn):
+        d = Path(body.dir).expanduser()
+        if not d.is_dir():
+            raise HTTPException(404, f"{d} 不是目錄")
+        if "heldout" in str(d):
+            raise HTTPException(422, "held-out 的圖不能進資料集（GOALS §4）")
+        ids = store.add_folder(ds_id, d, body.limit)
+        return {"added": len(ids), "image_ids": ids}
+
+    @app.post("/api/datasets/{ds_id}/label")
+    def dataset_label(ds_id: int, n_images: int | None = None, model: str = "base"):
+        """Run the teacher -> student -> compare chain on the dataset's unlabelled images,
+        following its config (auto questions and/or fixed prompts)."""
+        ds = store.get(ds_id)
+        ids = store.unlabelled_image_ids(ds_id)
+        if n_images:
+            ids = ids[:n_images]
+        if not ids:
+            raise HTTPException(409, "沒有還沒標的圖")
+        cfg = ds["config"]
+        qname = f"{ds['name']}-{time.strftime('%m%d-%H%M%S')}"
+        q = ws.create_queue(qname, "query", model, "autogen", Path(paths.JUDGE_MODEL).name)
+        store.attach_queue(q["id"], ds_id)
+        job_cfg = {
+            "image_ids": ids,
+            "skills": cfg.get("skills") or ["detect", "point", "query", "caption"],
+            "mode": cfg.get("mode", "auto"),
+            "fixed": cfg.get("fixed", ""),
+            "topics": cfg.get("topics") or [],
+            "focus": cfg.get("focus", ""),
+            "model": model,
+            "seed": 0,
+        }
+        ws.set_queue_mode(q["id"], "auto", job_cfg)
+        _start(q["id"], _autogen_queue, job_cfg)
+        return {**ws.queue(q["id"]), "job": jobs[q["id"]]}
+
+    @app.post("/api/datasets/{ds_id}/export")
+    def dataset_export(ds_id: int, images: bool = True):
+        return store.export(ds_id, paths.WORKSPACE / "export", images)
+
+    @app.get("/api/datasets/{ds_id}/download/{kind}")
+    def dataset_download(ds_id: int, kind: str):
+        ds = store.get(ds_id)
+        fn = f"{ds['name']}.jsonl" if kind == "jsonl" else f"{ds['name']}-images.zip"
+        p = paths.WORKSPACE / "export" / fn
+        if not p.exists():
+            raise HTTPException(404, "先按匯出")
+        return FileResponse(p, filename=p.name)
+
     @app.post("/api/train")
     def train_start(body: TrainIn):
-        """③ train on everything reviewed so far, then evaluate and gate."""
+        """③ train on the chosen datasets' train splits (or everything reviewed), then
+        evaluate on the held-out suites and each dataset's val split, then gate."""
+        from ..data import write_rows
+
+        name = body.name or default_name()
+        rows: list[dict] | None = None
+        vals: dict[str, Path] = {}
+        names: list[str] = []
+        if body.dataset_ids:
+            rows = []
+            for ds_id in body.dataset_ids:
+                ds = store.get(ds_id)
+                names.append(ds["name"])
+                rows += store.rows(ds_id, "train")
+                val_rows = store.rows(ds_id, "val")
+                if val_rows:
+                    vp = paths.WORKSPACE / "export" / f"val-{ds['name']}.jsonl"
+                    write_rows(vp, val_rows, ensure_ascii=False)
+                    vals[f"val-{ds['name']}"] = vp
         try:
-            return pipeline.start(body.name or default_name(), body.steps, body.lr, body.rank)
+            return pipeline.start(
+                name, body.steps, body.lr, body.rank, rows, vals, body.region_head, names
+            )
         except RuntimeError as e:
             raise HTTPException(409, str(e)) from e
+
+    @app.get("/api/train/{name}/orin.zip")
+    def train_orin(name: str):
+        st = pipeline.status(name)
+        if st is None:
+            raise HTTPException(404)
+        try:
+            z = make_bundle(paths.RUNS / name, name, st)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+        return FileResponse(z, filename=z.name)
 
     @app.get("/api/train")
     def train_list():
