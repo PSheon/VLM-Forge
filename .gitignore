@@ -6,7 +6,10 @@ __pycache__/
 /runs/
 /model-cache/
 /data/
-/workspace/
+/workspace*/
 /adapters/
 web/node_modules/
 web/dist/
+web/tsconfig.tsbuildinfo
+research_notes/
+reports/
