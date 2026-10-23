@@ -40,6 +40,16 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--adapter", type=Path, nargs="+", required=True)
     g.add_argument("--skill", required=True, help="detect | point | query | caption | multi")
     g.add_argument("--json", type=Path, help="also write the result here")
+
+    s = sub.add_parser("serve", help="the supervision UI (GOALS §6)")
+    s.add_argument("--host", default="0.0.0.0")
+    s.add_argument("--port", type=int, default=8796)
+    s.add_argument("--batch", type=int, default=16)
+
+    x = sub.add_parser("export", help="reviewed items -> training rows (+ Data Core bundle)")
+    x.add_argument("name")
+    x.add_argument("--queue", type=int, nargs="*", help="queue ids (default: every queue)")
+    x.add_argument("--incoming", action="store_true", help="also write the intake bundle")
     return p
 
 
@@ -91,6 +101,32 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             args.json.write_text(json.dumps(res, indent=1))
         return 0 if res["passed"] else 1
+    if args.command == "serve":
+        import uvicorn
+
+        from .server.api import create_app
+        from .server.engine import Engine
+        from .server.workspace import Workspace
+
+        app = create_app(
+            Workspace(paths.WORKSPACE), Engine(batch_size=args.batch), paths.ROOT / "web" / "dist"
+        )
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        return 0
+    if args.command == "export":
+        import json
+
+        from .server.export import export_incoming, export_train
+        from .server.workspace import Workspace
+
+        ws = Workspace(paths.WORKSPACE)
+        res = {"train": export_train(ws, args.queue or None, args.name)}
+        if args.incoming:
+            res["incoming"] = export_incoming(
+                ws, args.queue or None, args.name, paths.WORKSPACE / "incoming"
+            )
+        print(json.dumps(res, indent=1))
+        return 0
     return 0
 
 
