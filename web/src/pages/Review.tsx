@@ -1,15 +1,15 @@
 // ② 檢查 (docs/ui-spec §4): one image, one question at a time; every key saves and moves on.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred, type Summary } from "../api";
+import { api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
 import Canvas from "../components/Canvas";
 import { Dialog, useToast } from "../components/ui";
 import type { Step } from "../App";
 
-export default function Review({ reviewer, sum, refresh, go, setGuard }: { reviewer: string; sum: Summary | null; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void }) {
+export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void }) {
   const { say } = useToast();
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
-  const [dsId, setDsId] = useState<number | null>(null);
+  const dsId = datasetId;
+  const [sum, setSum] = useState<Dataset | null>(null);
   const [review, setReview] = useState<ImageReview | null>(null);
   const [idx, setIdx] = useState(0);
   const [label, setLabel] = useState<Pred | null>(null);
@@ -24,7 +24,8 @@ export default function Review({ reviewer, sum, refresh, go, setGuard }: { revie
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
 
-  useEffect(() => { api.datasets().then(setDatasets).catch(() => undefined); }, []);
+  const loadSum = useCallback(() => api.dataset(dsId).then(setSum).catch(() => undefined), [dsId]);
+  useEffect(() => { loadSum(); const t = setInterval(loadSum, 5000); return () => clearInterval(t); }, [loadSum]);
   useEffect(() => {
     setGuard(() => { if (!dirtyRef.current) return true; say("有改動還沒存：Enter 存，或 Z 還原", "warn"); return false; });
     return () => setGuard(null);
@@ -49,8 +50,10 @@ export default function Review({ reviewer, sum, refresh, go, setGuard }: { revie
       open(r as ImageReview);
     } catch (e) { say(String(e), "bad"); }
   }, [reviewer, dsId, refresh, open, say]);
-  useEffect(() => { if (!started.current && sum && sum.images_pending > 0) nextImage(); }, [sum?.images_pending]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (started.current) nextImage(); }, [dsId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (openImage) { started.current = true; api.reviewImage(openImage).then((r) => { open(r); onOpened?.(); }).catch((e) => say(String(e), "bad")); return; }
+    if (!started.current && sum && sum.images_pending > 0) nextImage();
+  }, [sum?.images_pending, openImage]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (grid) api.reviewImages(gridFilter, dsId).then(setImages).catch(() => undefined); }, [grid, gridFilter, dsId, sum?.pending]);
 
   const guarded = (fn: () => void) => { if (dirty) setPendingJump(() => fn); else fn(); };
@@ -111,14 +114,9 @@ export default function Review({ reviewer, sum, refresh, go, setGuard }: { revie
   });
   const spatialSelected = () => !!document.querySelector(".cv-stage .sel"); // arrows nudge a selected box instead
 
-  if (sum && sum.items === 0) return <div className="empty">還沒有資料。先到 ① 資料集 加照片、自動出題。</div>;
+  if (sum && sum.items === 0) return <div className="empty">這個資料集還沒有題。到「圖片」分頁加照片、按「標註」。</div>;
   if (!review || !it) {
-    return (
-      <div className="col">
-        <DsFilter datasets={datasets} dsId={dsId} setDsId={setDsId} />
-        <div className="empty">{msg === "都看完了" ? <>都看完了。<button className="primary" onClick={() => go("train")} style={{ marginLeft: 8 }}>去訓練 →</button></> : msg || (sum?.images_pending ? "載入中…" : "沒有待看的圖。")}</div>
-      </div>
-    );
+    return <div className="empty">{msg === "都看完了" ? <>這個資料集都看完了（已確認 {sum?.trainable ?? 0} 題）。<button className="primary" onClick={() => go("train")} style={{ marginLeft: 8 }}>去訓練 →</button></> : msg || (sum?.images_pending ? "載入中…" : "沒有待看的圖。到「圖片」分頁點任一張可以重看。")}</div>;
   }
   const changed = JSON.stringify(label) !== JSON.stringify(it.pred);
   const unsupported = it.skill === "caption" ? (it.judge?.unsupported ?? []).filter((p) => (label?.text ?? "").includes(p)) : [];
@@ -128,7 +126,6 @@ export default function Review({ reviewer, sum, refresh, go, setGuard }: { revie
   return (
     <div className="rv">
       <div className="rv-top row">
-        <DsFilter datasets={datasets} dsId={dsId} setDsId={(v) => guarded(() => setDsId(v))} compact />
         <span className="muted hint">{review.image.path.split("/").slice(-1)[0]}</span>
         <span className="strip">{items.map((x, i) => <i key={x.id} className={`${i === idx ? "cur " : ""}${x.status !== "pending" ? "done" : x.verdict === "fix" ? "fix" : x.verdict === "accept" ? "acc" : "none"}`} title={itemTitle(x)} onClick={() => goTo(i)} />)}</span>
         <span className="muted hint">題 {idx + 1}/{items.length} · 還有 {pendingLeft} 題 · 待看 {sum?.images_pending ?? 0} 張</span>
@@ -195,15 +192,6 @@ export default function Review({ reviewer, sum, refresh, go, setGuard }: { revie
         </div>
       )}
     </div>
-  );
-}
-
-function DsFilter({ datasets, dsId, setDsId, compact }: { datasets: Dataset[]; dsId: number | null; setDsId: (v: number | null) => void; compact?: boolean }) {
-  return (
-    <select value={dsId ?? ""} onChange={(e) => setDsId(e.target.value ? +e.target.value : null)} style={compact ? { padding: "2px 8px" } : undefined} title="只看某個資料集的圖">
-      <option value="">全部資料集</option>
-      {datasets.map((d) => <option key={d.id} value={d.id}>{d.name}（待看 {d.images_pending}）</option>)}
-    </select>
   );
 }
 
