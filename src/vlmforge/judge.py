@@ -148,7 +148,7 @@ class Judge:
     """Qwen3-VL through transformers; one image per generate (the judge is not the bottleneck,
     the human is)."""
 
-    def __init__(self, model_dir: str | Path, device: str = "cuda", max_new_tokens: int = 1024):
+    def __init__(self, model_dir: str | Path, device: str = "cuda", max_new_tokens: int = 2048):
         import torch
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
@@ -185,7 +185,7 @@ class Judge:
         raw_text = self.ask(image, teacher_prompt(focus, topics))
         t = parse_teacher(raw_text)
         t["raw"] = raw_text[:2000]
-        t["model"] = Path(self.model_dir).name
+        t["model"] = Path(self.model_dir).resolve().name
         return t
 
     def judge(self, image_path: str, skill: str, prompt: str, pred: dict) -> dict:
@@ -193,6 +193,6 @@ class Judge:
         shown = render(image, pred) if skill in ("detect", "point") else render(image, {})
         raw_text = self.ask(shown, prompt_for(skill, prompt, pred))
         v = verdict_from(skill, parse_json(raw_text))
-        v["model"] = Path(self.model_dir).name
+        v["model"] = Path(self.model_dir).resolve().name
         v["raw"] = raw_text[:500]
         return v

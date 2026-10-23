@@ -14,12 +14,15 @@ Labels for accepted items: text comes from the teacher, boxes / points from the 
 
 from __future__ import annotations
 
+import json
 import re
 
 from .evaluate import match_boxes, match_points_in_boxes, number
 from .judge import parse_json
 
 MAX_OBJECTS = 6
+MAX_INSTANCES = 12  # per object type; keeps the teacher's JSON inside its token budget
+MAX_QUESTIONS = 8
 
 # Industrial inspection questions every image gets a few of (Paul, 2026-10-23); a queue can
 # add its own topics on top.
@@ -38,15 +41,17 @@ INSPECTION_TOPICS = [
 TEACHER_PROMPT = """Look at this image and write training data for a small vision-language \
 model used in factories, warehouses and on robots.
 
-Answer with JSON only:
+Answer with compact JSON only (no line breaks inside lists), exactly this shape:
 {{"objects": [{{"name": "<short noun, singular>", "boxes": [[x0, y0, x1, y1], ...]}}, ...],
  "questions": [{{"q": "<question>", "a": "<short answer>"}}, ...],
  "caption": "<one or two factual sentences>"}}
 
 Rules:
 - objects: up to {max_objects} object types that are clearly visible; one box per instance, \
-tight, as integers 0-1000 (fraction of the image width / height times 1000). Prefer people, \
-vehicles, forklifts, pallets, boxes, shelves, doors, safety equipment, machinery, furniture.
+tight, as integers 0-1000 (fraction of the image width / height times 1000); "boxes" is \
+always a list of lists; at most {max_instances} instances per type (skip a type with more). \
+Prefer people, vehicles, forklifts, pallets, boxes, shelves, doors, safety equipment, \
+machinery, furniture.
 - questions, part 1 (3 to 4): a count ("How many ... are there?" answered with a digit), a \
 yes/no question, a colour or attribute, a location or spatial relation, an activity.
 - questions, part 2 (2 to 3 inspection questions, yes/no or a digit, only ones this image can \
@@ -59,19 +64,64 @@ answer): {topics}.
 def teacher_prompt(focus: str = "", topics: list[str] | None = None) -> str:
     extra = f"- Focus on: {focus}" if focus else ""
     tl = "; ".join(INSPECTION_TOPICS + [t for t in (topics or []) if t.strip()])
-    return TEACHER_PROMPT.format(max_objects=MAX_OBJECTS, focus=extra, topics=tl)
+    return TEACHER_PROMPT.format(
+        max_objects=MAX_OBJECTS, max_instances=MAX_INSTANCES, focus=extra, topics=tl
+    )
+
+
+_BOX_GROUPS = re.compile(r'("boxes"\s*:\s*)((?:\[[^\[\]]*\]\s*,?\s*)+)')
+
+
+def repair_json(text: str) -> str:
+    """Two things the 32B teacher gets wrong: ``"boxes": [1,2,3,4]`` or ``[..], [..]`` without
+    the outer list (wrapped here), and output cut off by the token budget (closed here: the
+    text is trimmed back to the last complete ``}`` and the open brackets are closed)."""
+    m = re.search(r"\{.*", text, re.S)
+    if not m:
+        return text
+    s = m.group(0)
+
+    def wrap(mm: re.Match) -> str:
+        groups = mm.group(2).rstrip().rstrip(",")
+        return f"{mm.group(1)}[{groups}]"
+
+    s = _BOX_GROUPS.sub(wrap, s)
+    try:
+        json.loads(s)
+        return s
+    except json.JSONDecodeError:
+        pass
+    cut = s.rfind("}")
+    s = s[: cut + 1] if cut > 0 else s
+    depth_sq = s.count("[") - s.count("]")
+    depth_br = s.count("{") - s.count("}")
+    # close the innermost open structures in an order that keeps lists inside objects valid
+    tail = ""
+    stack = []
+    for ch in s:
+        if ch in "[{":
+            stack.append(ch)
+        elif ch in "]}" and stack:
+            stack.pop()
+    for ch in reversed(stack):
+        tail += "]" if ch == "[" else "}"
+    s = s.rstrip().rstrip(",") + tail
+    return s if (depth_sq or depth_br) else s
 
 
 def parse_teacher(text: str) -> dict:
     """Judge output -> {"objects": [{"name", "boxes": [[0-1 floats]]}], "questions": [...],
     "caption": str}; malformed parts are dropped, never guessed."""
-    raw = parse_json(text)
+    raw = parse_json(repair_json(text))
     objects = []
     for o in raw.get("objects", []) if isinstance(raw.get("objects"), list) else []:
         if not isinstance(o, dict) or not str(o.get("name", "")).strip():
             continue
         boxes = []
-        for b in o.get("boxes", []) or []:
+        bl = o.get("boxes", []) or []
+        if len(bl) == 4 and all(isinstance(x, int | float) for x in bl):
+            bl = [bl]  # a single flat box
+        for b in bl[:MAX_INSTANCES]:
             if isinstance(b, list | tuple) and len(b) == 4:
                 try:
                     v = [min(1.0, max(0.0, float(x) / 1000.0)) for x in b]
@@ -85,7 +135,11 @@ def parse_teacher(text: str) -> dict:
         if isinstance(q, dict) and str(q.get("q", "")).strip() and str(q.get("a", "")).strip():
             questions.append({"q": str(q["q"]).strip()[:200], "a": str(q["a"]).strip()[:80]})
     caption = str(raw.get("caption", "")).strip()[:600]
-    return {"objects": objects[:MAX_OBJECTS], "questions": questions[:5], "caption": caption}
+    return {
+        "objects": objects[:MAX_OBJECTS],
+        "questions": questions[:MAX_QUESTIONS],
+        "caption": caption,
+    }
 
 
 def items_from_teacher(t: dict, skills: set[str]) -> list[dict]:
