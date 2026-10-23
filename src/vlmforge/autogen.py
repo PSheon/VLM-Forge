@@ -223,16 +223,16 @@ def _norm(s: str) -> str:
 def agree(skill: str, pred: dict | None, teacher: dict) -> dict:
     """Student vs teacher -> a judge-style verdict (``accept`` / ``fix``) with a note."""
     if pred is None:
-        return {"verdict": "fix", "note": "student gave no answer", "model": "agreement"}
+        return {"verdict": "fix", "note": "模型沒作答", "model": "agreement"}
     if skill == "detect":
         tp, fp, fn = match_boxes(pred.get("boxes") or [], teacher.get("boxes") or [])
         ok = fp == 0 and fn == 0
-        note = f"student {tp + fp} boxes vs teacher {tp + fn}: {tp} match, {fp} extra, {fn} missed"
+        note = f"模型 {tp + fp} 框 vs 預標 {tp + fn} 框：{tp} 對上、{fp} 多出、{fn} 漏掉"
         return {"verdict": "accept" if ok else "fix", "note": note, "model": "agreement"}
     if skill == "point":
         tp, fp, fn = match_points_in_boxes(pred.get("points") or [], teacher.get("boxes") or [])
         ok = fp == 0 and fn == 0
-        note = f"student {tp + fp} points vs teacher {tp + fn} boxes: {fp} outside, {fn} missed"
+        note = f"模型 {tp + fp} 點 vs 預標 {tp + fn} 框：{fp} 點落在框外、{fn} 框沒有點"
         return {"verdict": "accept" if ok else "fix", "note": note, "model": "agreement"}
     if skill == "query":
         s, t = str(pred.get("text", "")), str(teacher.get("text", ""))
@@ -246,11 +246,11 @@ def agree(skill: str, pred: dict | None, teacher: dict) -> dict:
             ok = _norm(s) == _norm(t) or (_norm(t) in _norm(s) and len(_norm(t)) >= 3)
         return {
             "verdict": "accept" if ok else "fix",
-            "note": f'student "{s[:60]}" vs teacher "{t[:60]}"',
+            "note": f"模型「{s[:60]}」vs 預標「{t[:60]}」",
             "answer": t,
             "model": "agreement",
         }
-    return {"verdict": "fix", "note": "caption needs the judge", "model": "agreement"}
+    return {"verdict": "fix", "note": "caption 交給 judge 查", "model": "agreement"}
 
 
 def auto_label(skill: str, pred: dict | None, teacher: dict) -> dict:

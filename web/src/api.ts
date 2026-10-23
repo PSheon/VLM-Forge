@@ -230,7 +230,7 @@ export function judgeText(v: JudgeVerdict | null | undefined): string {
   const parts: string[] = [];
   if (v.wrong?.length) parts.push(`框/點 ${v.wrong.join(", ")} 不對`);
   if (v.missed) parts.push(`漏 ${v.missed} 個`);
-  if (v.answer && v.verdict === "fix") parts.push(`預標答案「${v.answer}」`);
+  
   if (v.unsupported?.length) parts.push(`圖裡沒有：${v.unsupported.join("、")}`);
   if (v.note) parts.push(v.note);
   return parts.join("；");

@@ -75,35 +75,37 @@ export default function Review({ reviewer, sum, refresh, go }: { reviewer: strin
       <section style={{ minWidth: 0 }}>
         {review && it ? (
           <>
-            <div className="row" style={{ marginBottom: 6 }}>
-              <strong style={{ fontSize: 17 }}>{title(it)}</strong>
-              <span className="muted hint">{review.image.path.split("/").slice(-2).join("/")}{it.teacher ? ` · 預標 ${summary(it.teacher)}` : ""}{it.pred ? ` · 模型 ${summary(it.pred)}` : ""} · 目前 {summary(d?.label)}</span>
-            </div>
-            {it.judge && <div className={it.verdict === "fix" ? "warn hint" : "hint ok"} style={{ marginBottom: 6 }}>{it.verdict === "fix" ? "不一致，請你看" : "一致"}{it.spot ? "（抽查）" : ""}：{judgeText(it.judge) || "—"}</div>}
-            <Canvas src={api.imageUrl(review.image.id, 2048)} skill={it.skill} value={d?.label ?? null} onChange={setLabel} alt={spatial ? it.teacher : null} labels={spatial && it.teacher ? { main: "目前（可改）", alt: "預標" } : undefined} height="calc(100vh - 230px)" />
-            {!spatial && (
-              <div className="grid2" style={{ marginTop: 8 }}>
-                <label className="f">目前答案（可改）<textarea value={d?.label.text ?? ""} onChange={(e) => setLabel({ text: e.target.value })} /></label>
-                <div className="col hint">
-                  {it.teacher && <div>預標：{it.teacher.text} <button onClick={() => setLabel({ text: it.teacher!.text ?? "" })}>用這個</button></div>}
-                  {it.pred && <div>模型：{it.pred.text} <button onClick={() => setLabel({ text: it.pred!.text ?? "" })}>用這個</button></div>}
-                </div>
-              </div>
-            )}
+            <div className="muted hint" style={{ marginBottom: 4 }}>{review.image.path.split("/").slice(-2).join("/")} · {review.items.length} 題</div>
+            <Canvas src={api.imageUrl(review.image.id, 2048)} skill={it.skill} value={d?.label ?? null} onChange={setLabel} alt={spatial ? it.teacher : null} labels={spatial && it.teacher ? { main: "目前（可改）", alt: "預標" } : undefined} height="calc(100vh - 200px)" />
           </>
         ) : (
           <div className="empty">{msg === "都看完了" ? <>都看完了。<button className="primary" onClick={go} style={{ marginLeft: 8 }}>去訓練 →</button></> : msg || (sum?.images_pending ? "載入中…" : "沒有待看的圖。")}</div>
         )}
       </section>
       <aside className="card col">
-        {review && (
+        {review && it && (
           <>
             <div className="row">
               <button className="primary" onClick={confirm}>整張確認 <kbd>Enter</kbd></button>
               <button onClick={() => next(review.image.id)}>跳過 <kbd>N</kbd></button>
             </div>
-            <div className="hint muted">這張圖 {review.items.length} 題。確認＝每題照目前畫面存；✕ 的丟棄。<br /><span className="bad">●</span> 不一致（模型 vs 預標）請你看 · <span className="ok">○</span> 一致 · <span className="muted">–</span> 未比對（模型沒作答）</div>
-            <div className="list" style={{ maxHeight: "36vh" }}>
+            <div className="card col" style={{ background: "var(--bg)" }}>
+              <strong>{title(it)}</strong>
+              {it.judge && <div className={it.verdict === "fix" ? "warn hint" : "hint ok"}>{it.verdict === "fix" ? "不一致，請你看" : "一致"}{it.spot ? "（抽查）" : ""}：{judgeText(it.judge) || "—"}</div>}
+              {spatial ? (
+                <div className="hint muted">預標 {summary(it.teacher)} · 模型 {summary(it.pred)} · 目前 {summary(d?.label)}。實線可改，虛線是預標。</div>
+              ) : (
+                <>
+                  <textarea value={d?.label.text ?? ""} onChange={(e) => setLabel({ text: e.target.value })} style={{ minHeight: 56 }} />
+                  <div className="row hint">
+                    {it.teacher && <button onClick={() => setLabel({ text: it.teacher!.text ?? "" })} title={it.teacher.text}>用預標：{(it.teacher.text ?? "").slice(0, 24)}{(it.teacher.text ?? "").length > 24 ? "…" : ""}</button>}
+                    {it.pred && <button onClick={() => setLabel({ text: it.pred!.text ?? "" })} title={it.pred.text}>用模型：{(it.pred.text ?? "").slice(0, 24)}{(it.pred.text ?? "").length > 24 ? "…" : ""}</button>}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="hint muted">確認＝每題照目前畫面存；✕ 的丟棄。<span className="bad">●</span> 不一致 · <span className="ok">○</span> 一致 · <span className="muted">–</span> 未比對</div>
+            <div className="list" style={{ maxHeight: "30vh" }}>
               {review.items.map((x) => {
                 const dd = dec[x.id];
                 const changed = dd && JSON.stringify(dd.label) !== JSON.stringify(x.pred);
@@ -126,7 +128,7 @@ export default function Review({ reviewer, sum, refresh, go }: { reviewer: strin
             <option value="reviewed">已看過</option>
           </select>
         </div>
-        <div className="thumbs" style={{ maxHeight: review ? "calc(100vh - 520px)" : "calc(100vh - 220px)" }}>
+        <div className="thumbs" style={{ maxHeight: review ? "22vh" : "calc(100vh - 220px)" }}>
           {images.map((im) => (
             <div key={im.image_id} className="th" onClick={async () => open(await api.reviewImage(im.image_id))} title={`${im.n} 題 · 不一致 ${im.fix}`}>
               <img src={api.imageUrl(im.image_id, 200)} className={review?.image.id === im.image_id ? "cur" : ""} loading="lazy" />
