@@ -301,7 +301,10 @@ def test_retriage_keeps_the_spot_sample(tmp_path, monkeypatch):
 
     monkeypatch.setattr(wsmod, "SPOT_MIN", 0)
     monkeypatch.setattr(wsmod, "SPOT_FRAC", 0.2)
+    from vlmforge.server.datasets import DatasetStore
+
     ws = Workspace(tmp_path / "ws")
+    DatasetStore(ws)  # adds queues.dataset_id, as the app always does
     im = ws.add_image_bytes(png_bytes("red"), ext="png")
     q = ws.create_queue("b", "query", "base")
     box = {"boxes": [[0.1, 0.1, 0.5, 0.5]]}
@@ -319,3 +322,11 @@ def test_retriage_keeps_the_spot_sample(tmp_path, monkeypatch):
     still = {it["id"] for it in ws.items(q["id"], "pending", wsmod.ALL)}
     assert sampled <= still  # nothing already drawn was auto-passed
     assert second["auto"] == 4 and len(still) == 11  # budget round(0.2 * 55) = 11 → 1 new draw
+    # 只看抽查: an image whose only pending items are not spot-checks is skipped
+    im2 = ws.add_image_bytes(png_bytes("blue"), ext="png")
+    fix = ws.add_item(im2["id"], "detect", "x", box, "base", q["id"], "auto", box)
+    ws.set_judge(fix, {"verdict": "fix", "note": "", "model": "agreement"})
+    image, _ = ws.claim_next_image(q["id"], "P", only_spot=True)
+    assert image["id"] == im["id"]
+    image, _ = ws.claim_next_image(q["id"], "Q")
+    assert image["id"] == im2["id"]  # without the filter the disagreement comes first

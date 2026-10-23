@@ -247,6 +247,17 @@ class DatasetStore:
         out["trainable"] = out["auto"] + out["reviewed"]
         out["trainable_images"] = ti or 0  # train-split images with ≥1 confirmed item
         out["trainable_by_skill"] = {row["skill"]: row["n"] for row in ts}
+        # the spot check measures the teacher: of the agreed questions a human re-checked, how
+        # many did they leave as they were (approved) vs change or discard
+        sp = self.db.execute(
+            "select sum(items.spot = 1) total,"
+            " sum(items.spot = 1 and items.status = 'pending') pending,"
+            " sum(items.spot = 1 and items.status = 'approved') agree,"
+            " sum(items.spot = 1 and items.status in ('corrected', 'discarded')) changed"
+            " from items join queues on queues.id = items.queue_id where queues.dataset_id = ?",
+            (ds_id,),
+        ).fetchone()
+        out["spot"] = {k: sp[k] or 0 for k in ("total", "pending", "agree", "changed")}
         return out
 
     def rows(self, ds_id: int, split: str) -> list[dict]:

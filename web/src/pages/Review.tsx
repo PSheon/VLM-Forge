@@ -7,7 +7,7 @@ import { ActionsHead, Dialog, Pill, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
 import type { Step } from "../App";
 
-export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard, header, onExit }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void; header?: (extra?: ReactNode) => ReactNode; onExit?: () => void }) {
+export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard, header, onExit, spotOnly = false, setSpotOnly }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void; header?: (extra?: ReactNode) => ReactNode; onExit?: () => void; spotOnly?: boolean; setSpotOnly?: (v: boolean) => void }) {
   const { say } = useToast();
   const dsId = datasetId;
   const [sum, setSum] = useState<Dataset | null>(null);
@@ -38,19 +38,23 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
   const spatial = !!it && (it.skill === "detect" || it.skill === "point");
   const pendingLeft = items.filter((x) => x.status === "pending").length;
 
+  // 只看抽查: the spot-check questions come first and are the only ones stepped through
+  const wanted = useCallback((x: Item) => x.status === "pending" && (!spotOnly || !!x.spot), [spotOnly]);
   const open = useCallback((r: ImageReview) => {
-    const order = [...r.items].sort((a, b) => rank(a) - rank(b) || a.id - b.id);
-    const first = Math.max(0, order.findIndex((x) => x.status === "pending"));
+    const order = [...r.items].sort((a, b) => (spotOnly ? Number(!a.spot) - Number(!b.spot) : 0) || rank(a) - rank(b) || a.id - b.id);
+    const f = order.findIndex(wanted);
+    const first = Math.max(0, f >= 0 ? f : order.findIndex((x) => x.status === "pending"));
     setReview({ ...r, items: order }); setIdx(first); setLabel(initial(order[first] ?? order[0])); setDirty(false); setMsg("");
-  }, []);
+  }, [spotOnly, wanted]);
   const nextImage = useCallback(async (after?: string) => {
     started.current = true;
     try {
-      const r = await api.nextImage(reviewer, after, dsId);
-      if (!("image" in r)) { setReview(null); setMsg("都看完了"); refresh(); return; }
+      const r = await api.nextImage(reviewer, after, dsId, spotOnly);
+      if (!("image" in r)) { setReview(null); setMsg(spotOnly ? "抽查都看完了" : "都看完了"); refresh(); return; }
       open(r as ImageReview);
     } catch (e) { setReview(null); setMsg(`取圖失敗：${String(e)}`); say(String(e), "bad"); }
-  }, [reviewer, dsId, refresh, open, say]);
+  }, [reviewer, dsId, refresh, open, say, spotOnly]);
+  useEffect(() => { if (started.current && !openImage) nextImage(); }, [spotOnly]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (openImage) { started.current = true; api.reviewImage(openImage).then((r) => { open(r); onOpened?.(); }).catch((e) => say(String(e), "bad")); return; }
     if (!started.current && sum && sum.images_pending > 0) nextImage();
@@ -62,8 +66,8 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
   const advance = (saved: Item[]) => {
     const nextItems = items.map((x) => saved.find((s) => s.id === x.id) ?? x);
     setReview((r) => (r ? { ...r, items: nextItems } : r));
-    const k = nextItems.findIndex((x, i) => i > idx && x.status === "pending");
-    const k2 = k >= 0 ? k : nextItems.findIndex((x) => x.status === "pending");
+    const k = nextItems.findIndex((x, i) => i > idx && wanted(x));
+    const k2 = k >= 0 ? k : nextItems.findIndex(wanted);
     if (k2 >= 0) { setIdx(k2); setLabel(initial(nextItems[k2])); setDirty(false); }
     else { say("這張看完了 ✓", "ok", { ms: 1200 }); refresh(); setTimeout(() => nextImage(review!.image.id), 300); }
   };
@@ -168,6 +172,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
   const shell = (body: ReactNode) => <div className="page"><div className="col">{header?.()}{body}</div><div className="actions"><ActionsHead /></div></div>;
   if (sum && sum.items === 0) return shell(<div className="empty">這個資料集還沒有題。到「圖片」分頁加照片、按「標註」。</div>);
   if (!review || !it) {
+    if (msg === "抽查都看完了") return shell(<div className="empty">抽查題都看完了。<button className="primary" onClick={() => setSpotOnly?.(false)} style={{ marginLeft: 8 }}>回到全部待看 →</button></div>);
     return shell(<div className="empty">{msg === "都看完了" ? <>這個資料集都看完了（已確認 {sum?.trainable ?? 0} 題）。<button className="primary" onClick={() => go("train")} style={{ marginLeft: 8 }}>去訓練 →</button></> : msg ? <span className="row" style={{ justifyContent: "center" }}><span className="bad">{msg}</span><button onClick={() => nextImage()}>重試</button></span> : sum?.images_pending ? <span className="row" style={{ justifyContent: "center" }}><i className="spin" />載入中…</span> : "沒有待看的圖。到「圖片」分頁點任一張可以重看。"}</div>);
   }
   const changed = JSON.stringify(label) !== JSON.stringify(it.pred);
@@ -193,7 +198,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
           <Canvas src={api.imageUrl(review.image.id, 2048)} skill={it.skill} value={label} onChange={(p, what) => edit(p, what)} alt={spatial ? it.teacher : null} labels={spatial ? { main: "目前（可改）", alt: "預標" } : undefined} fitAspect={{ maxOffset: 212 }} focus={focus} focusKey={it.id} compact />
         </div>
         <Fade k={it.id} className="actions" y={10}>
-          <ActionsHead><button className="ghost" onClick={() => setGrid(!grid)} title="G">所有圖</button><span className="small muted">{reviewer} 認領中{claimedOther ? `（${claimedOther} 也在看）` : ""}</span></ActionsHead>
+          <ActionsHead><button className="ghost" onClick={() => setGrid(!grid)} title="G">所有圖</button>{setSpotOnly && <button className={spotOnly ? "cur" : "ghost"} onClick={() => guarded(() => setSpotOnly(!spotOnly))} title="只取有抽查題的圖，只在抽查題之間跳">只看抽查</button>}<span className="small muted">{reviewer} 認領中{claimedOther ? `（${claimedOther} 也在看）` : ""}</span></ActionsHead>
           <div className="row">
             <button className="primary big" onClick={accept}>{changed ? "存修正" : "沒問題"} <kbd>Enter</kbd></button>
             <button onClick={discard} title="D">丟棄</button>

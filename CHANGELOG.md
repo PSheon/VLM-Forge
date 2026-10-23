@@ -11,6 +11,7 @@ All notable changes to VLM-Forge. Versions follow [SemVer](https://semver.org/);
 
 ### Added
 - `web/e2e/smoke.mjs` (`npm run e2e`): the UI contract of docs/ui-spec §1 as a read-only Playwright check.
+- **AI 導師可信度.** The dataset page shows how far the spot check got and the share of re-checked agreed questions you left as they were (≥ 90 % with ≥ 30 seen = auto-passed questions are trustworthy). 「只看抽查」 (dataset card or the review tool row) serves only images with spot-check questions and steps only through those; `GET /api/review/next-image?spot=true`, datasets return `spot`.
 
 ## [0.3.0] — 2026-10-23
 

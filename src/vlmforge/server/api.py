@@ -724,8 +724,12 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         }
 
     @app.get("/api/review/next-image")
-    def review_next_image(reviewer: str, after: str | None = None, dataset_id: int | None = None):
-        r = ws.claim_next_image(None, reviewer, after, dataset_id)
+    def review_next_image(
+        reviewer: str, after: str | None = None, dataset_id: int | None = None, spot: bool = False
+    ):
+        """``spot``: only images that still have a spot-check question (the teacher-trust
+        sample, see DatasetStore.counts)."""
+        r = ws.claim_next_image(None, reviewer, after, dataset_id, spot)
         if r is None:
             return {}
         image, items = r

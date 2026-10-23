@@ -99,6 +99,7 @@ function NewDataset({ open, existing, onClose, onCreated }: { open: boolean; exi
 function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }: { d: Dataset; status: Status | null; reload: () => void; go: (s: Step) => void; reviewer: string; setGuard: (g: (() => boolean) | null) => void; onBack: () => void; onDeleted: () => void }) {
   const { say } = useToast();
   const [tab, setTab] = useState<View>("images");
+  const [spotOnly, setSpotOnly] = useState(false);
   const [openSec, setOpenSec] = useState<"" | "teacher" | "export">("");
   const [openImage, setOpenImage] = useState<string | null>(null);
   const [full, setFull] = useState<Dataset | null>(null);
@@ -158,6 +159,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const lowMem = freeGb !== null && !judgeLoaded && freeGb < needGb;
   const labelText = interrupted(batch) ? "先把上一輪接著跑完" : !judgeOk ? "出題模型缺，不能標" : gpuBusy ? "排隊中…（GPU 忙）" : lowMem ? `GPU 只剩 ${freeGb!.toFixed(0)} GB（出題要 ${needGb} GB），等別的訓練結束` : unlabelled === 0 ? "沒有新圖" : `標註新加的 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張`;
   const total = (full ?? d).images;
+  const sp = (full ?? d).spot;
   const pendingImgs = (full ?? d).images_pending, trainable = (full ?? d).trainable;
   const labelBlocked = !judgeOk || gpuBusy || lowMem || (mode !== "auto" && nFixed === 0);
   // one orange button: the next thing to do (docs/ui-spec §3)
@@ -212,6 +214,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
               {cta?.run !== label && unlabelled > 0 && !running && !interrupted(batch) && <span className="muted">{labelBlocked ? labelText : ""}</span>}
               {cta && !cta.text.startsWith("去檢查") && pendingImgs > 0 && !running && <button className="ghost" onClick={() => setTab("review")}>去檢查（{pendingImgs} 張）→</button>}
             </div>
+            {!!sp?.total && <SpotCard sp={sp} onOpen={() => { setSpotOnly(true); setTab("review"); }} />}
             {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
             {full && full.batches && full.batches.length > 1 && (
               <div className="col"><strong className="small">批次紀錄</strong>{full.batches.slice(1, 6).map((b) => <div key={b.id} className="small muted">{b.created_at.slice(5, 16).replace("T", " ")} · {b.total} 題 · {b.job?.state === "cancelled" ? "取消" : b.job?.state === "error" ? "失敗" : "完成"} · 一致 {b.verdicts?.accept ?? 0} · 不一致 {b.verdicts?.fix ?? 0}</div>)}</div>
@@ -248,9 +251,25 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
         </div>
       )}
 
-      {tab === "review" && <Review reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} header={header} onExit={() => setTab("images")} />}
+      {tab === "review" && <Review spotOnly={spotOnly} setSpotOnly={setSpotOnly} reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} header={header} onExit={() => setTab("images")} />}
       </Fade>
       <ConfirmDialog open={askDelete} title={`刪除 ${d.name}？`} body="只刪資料集與歸屬；圖和題留在工作區。" confirmText="刪除" typed={d.name} danger onCancel={() => setAskDelete(false)} onConfirm={doDelete} />
+    </div>
+  );
+}
+
+/** How far the spot check got and what it says about the teacher: of the agreed questions you
+ *  re-checked, the share you left exactly as they were. */
+function SpotCard({ sp, onOpen }: { sp: NonNullable<Dataset["spot"]>; onOpen: () => void }) {
+  const seen = sp.agree + sp.changed;
+  const pct = seen ? Math.round((100 * sp.agree) / seen) : null;
+  const verdict = pct === null ? "看幾題就有數字" : seen < 30 ? "樣本還少，先看到 30 題" : pct >= 90 ? "自動通過的題可信" : pct >= 75 ? "大致可信，建議多抽一些" : "不太可信：先別用自動通過的題訓練";
+  return (
+    <div className="panel col">
+      <div className="row" style={{ justifyContent: "space-between" }}><b>AI 導師可信度</b>{pct !== null && <Pill kind={seen < 30 ? "grey" : pct >= 90 ? "ok" : pct >= 75 ? "warn" : "bad"}>{pct}% 直接同意</Pill>}</div>
+      <div className="small muted">抽查 看了 {seen}/{sp.total} 題 · 同意 {sp.agree} · 改了或丟棄 {sp.changed}</div>
+      <Bar done={seen} total={sp.total} />
+      <div className="row" style={{ justifyContent: "space-between" }}><span className="hint">{verdict}</span>{sp.pending > 0 && <button className="ghost" onClick={onOpen}>只看抽查（{sp.pending}）→</button>}</div>
     </div>
   );
 }

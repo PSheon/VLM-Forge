@@ -423,10 +423,11 @@ class Workspace:
         reviewer: str,
         after_image: str | None = None,
         dataset_id: int | None = None,
+        only_spot: bool = False,
     ):
         """The next image with pending items (images holding a ``fix`` first; ``queue_id`` /
-        ``dataset_id`` None = any); every pending item of it is claimed for the reviewer.
-        Returns (image, items) or None."""
+        ``dataset_id`` None = any; ``only_spot``: only images with a pending spot-check item);
+        every pending item of it is claimed for the reviewer. Returns (image, items) or None."""
         with self.lock:
             cutoff = time.time() - CLAIM_MINUTES * 60
             rows = self.db.execute(
@@ -435,8 +436,9 @@ class Workspace:
                 " from items join queues on queues.id = items.queue_id"
                 " where (? is null or items.queue_id = ?) and (? is null or queues.dataset_id = ?)"
                 " and items.status = 'pending'"
-                " group by items.image_id order by fix desc, first_id",
-                (reviewer, cutoff, queue_id, queue_id, dataset_id, dataset_id),
+                " group by items.image_id having (? = 0 or max(items.spot) = 1)"
+                " order by fix desc, first_id",
+                (reviewer, cutoff, queue_id, queue_id, dataset_id, dataset_id, int(only_spot)),
             ).fetchall()
             pick = None
             seen_after = after_image is None
