@@ -374,11 +374,21 @@ class Workspace:
         from ..autogen import auto_label
 
         pend = self.items(queue_id, "pending", ALL)
-        accepted = [it for it in pend if it["verdict"] == "accept"]
+        # idempotent: items already drawn for the spot check stay drawn (re-running triage on a
+        # half-reviewed batch once auto-passed 128 of them), and the 10 % budget counts every
+        # accepted item of the batch — auto-passed and already-sampled ones included
+        accepted = [it for it in pend if it["verdict"] == "accept" and not it["spot"]]
+        drawn = {it["id"] for it in pend if it["spot"]}
+        n_acc = self.db.execute(
+            "select count(*) from items where queue_id = ? and verdict = 'accept'", (queue_id,)
+        ).fetchone()[0]
+        n_spot = self.db.execute(
+            "select count(*) from items where queue_id = ? and spot = 1", (queue_id,)
+        ).fetchone()[0]
         rng = random.Random(seed)
         order = list(range(len(accepted)))
         rng.shuffle(order)
-        k = min(len(accepted), max(SPOT_MIN, round(SPOT_FRAC * len(accepted))))
+        k = min(len(accepted), max(0, max(SPOT_MIN, round(SPOT_FRAC * n_acc)) - n_spot))
         spot = {accepted[i]["id"] for i in order[:k]}
         n_auto = 0
         with self.lock:
@@ -395,6 +405,7 @@ class Workspace:
                     self.db.execute("update items set status = 'auto' where id = ?", (it["id"],))
                     n_auto += 1
             self.db.commit()
+        spot |= drawn
         images = {it["image_id"] for it in pend}
         left = {it["image_id"] for it in pend if it["verdict"] != "accept" or it["id"] in spot}
         return {
