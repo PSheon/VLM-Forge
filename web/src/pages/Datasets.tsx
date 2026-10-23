@@ -19,16 +19,21 @@ export default function Datasets({ status, refresh, go, reviewer, setGuard }: { 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
   const detail = list.find((d) => d.id === cur) ?? null;
   if (detail) return <Detail key={detail.id} d={detail} status={status} reload={() => { load(); refresh(); }} go={go} reviewer={reviewer} setGuard={setGuard} onBack={() => setCur(null)} onDeleted={() => { setCur(null); load(); }} />;
+  const tot = (k: "images" | "items" | "trainable" | "images_pending") => list.reduce((a, d) => a + (d[k] ?? 0), 0);
   return (
-    <div className="col">
-      <div className="row" style={{ justifyContent: "space-between" }}>
+    <div className="page">
+      <div className="col">
         <h2>資料集</h2>
-        <button className="primary" onClick={() => setShowNew(true)}>＋ 新資料集</button>
+        {list.length === 0 && <div className="empty">還沒有資料集。建一個，把照片丟進去，AI 導師先標一輪，你再檢查。</div>}
+        <Stagger className="cards">
+          {list.map((d) => <Item key={d.id}><DatasetCard d={d} onClick={() => setCur(d.id)} /></Item>)}
+        </Stagger>
       </div>
-      {list.length === 0 && <div className="empty">還沒有資料集。建一個，把照片丟進去，AI 導師先標一輪，你再檢查。</div>}
-      <Stagger className="cards">
-        {list.map((d) => <Item key={d.id}><DatasetCard d={d} onClick={() => setCur(d.id)} /></Item>)}
-      </Stagger>
+      <div className="actions">
+        <button className="primary big" onClick={() => setShowNew(true)}>＋ 新資料集</button>
+        {list.length > 0 && <div className="stat" style={{ flexWrap: "wrap" }}><span>資料集 <b>{list.length}</b></span><span>圖 <b>{tot("images")}</b></span><span>題 <b>{tot("items")}</b></span><span>已確認 <b>{tot("trainable")}</b></span><span>還要看 <b>{tot("images_pending")}</b> 張</span></div>}
+        <div className="hint muted">一個資料集＝一批照片＋AI 導師出的題＋你確認過的答案。可以陸續加圖、重複標註。</div>
+      </div>
       <NewDataset open={showNew} existing={list.map((d) => d.name)} onClose={() => setShowNew(false)} onCreated={(d) => { setShowNew(false); load(); setCur(d.id); }} />
     </div>
   );
@@ -169,7 +174,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
       <div className="tabs big">{tabs.map(([k, l]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)}>{l}</button>)}</div>
       <Fade k={tab}>
       {tab === "images" && (
-        <div className="grid-2 ds">
+        <div className="page">
           <div className="col">
             <div className={`drop${drag ? " on" : ""}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}>
               把照片拖到這裡，或 <button onClick={() => fileInput.current?.click()} disabled={busy}>選檔案</button>（可多張、可 zip）
@@ -182,7 +187,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
             <div className="small muted">{grid.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 點一張進去檢查` : "還沒有圖"}</div>
             <Grid cells={grid} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
-          <div className="col ds-side">
+          <div className="actions">
             {cta && <button className="primary big" onClick={cta.run} disabled={cta.disabled}>{cta.text}</button>}
             <Pop show={total === 0} className="hint muted">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</Pop>
             <Pop show={total > 0 && unlabelled > 0 && !running && !interrupted(batch) && !labelBlocked} className="hint muted">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}，約 20 秒/張；一致的自動通過，不一致的才要你看。</Pop>
@@ -203,7 +208,8 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
       {tab === "review" && <Review reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} />}
 
       {tab === "settings" && (
-        <div className="grid-2">
+        <div className="page">
+          <div className="col">
           <div className="col panel">
             <h3>AI 導師怎麼標</h3>
             <label className="row"><input type="radio" name="mode" checked={mode === "auto"} onChange={() => setMode("auto")} /> 自動出題（導師看圖決定物件、問答、巡檢題、caption）</label>
@@ -215,7 +221,6 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
                 <div className="hint">{nFixed > 0 ? <span className="ok">✓ {nFixed} 題有效（detect {parsed.ok.detect.length}、point {parsed.ok.point.length}、query {parsed.ok.query.length}、caption {parsed.ok.caption.length}）</span> : <span className="muted">還沒有有效的題</span>}{parsed.bad.length > 0 && <span className="bad"> · ✗ 第 {parsed.bad.join("、")} 行看不懂（要像 <code>detect: person</code>）</span>}</div>
               </>
             )}
-            <div className="row"><button className="primary" onClick={saveConfig} disabled={!cfgDirty}>{cfgDirty ? "儲存設定" : "已儲存"}</button><span className="muted hint">下次按「標註」會用這組設定；已出的題不變。</span></div>
           </div>
           <div className="col panel">
             <h3>進階</h3>
@@ -228,15 +233,26 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
               <button className="ghost bad" onClick={() => setAskDelete(true)}>刪除這個資料集…</button>
             </div>
           </div>
+          </div>
+          <div className="actions">
+            <button className="primary big" onClick={saveConfig} disabled={!cfgDirty}>{cfgDirty ? "儲存設定" : "已儲存"}</button>
+            <div className="muted hint">下次按「標註」會用這組設定；已出的題不變。</div>
+            {mode !== "auto" && <div className="hint">{nFixed > 0 ? <span className="ok">✓ {nFixed} 題有效</span> : <span className="bad">還沒有有效的指定題目</span>}</div>}
+          </div>
         </div>
       )}
 
       {tab === "export" && (
-        <div className="panel col" style={{ maxWidth: 720 }}>
-          <h3>匯出</h3>
-          <div className="hint muted">已確認的題（人確認＋自動通過）→ jsonl（座標 0–1，含 split 欄）＋ 圖的 zip。</div>
-          <button className="primary" onClick={doExport} disabled={busy || !(full ?? d).trainable}>匯出 {(full ?? d).trainable} 題</button>
-          {exp && <div className="hint">寫到 <code>{exp.jsonl}</code>（{exp.rows} 列）· <a href={api.downloadUrl(d.id, "jsonl")}>下載 jsonl</a>{exp.zip && <> · <a href={api.downloadUrl(d.id, "zip")}>下載圖 zip（{exp.images} 張）</a></>}</div>}
+        <div className="page">
+          <div className="panel col">
+            <h3>匯出</h3>
+            <div className="hint muted">已確認的題（人確認＋自動通過）→ jsonl（座標 0–1，含 split 欄）＋ 圖的 zip。訓練頁會直接讀資料集，不需要先匯出；匯出是給別的工具用的。</div>
+            {exp ? <div className="hint">寫到 <code>{exp.jsonl}</code>（{exp.rows} 列）· <a href={api.downloadUrl(d.id, "jsonl")}>下載 jsonl</a>{exp.zip && <> · <a href={api.downloadUrl(d.id, "zip")}>下載圖 zip（{exp.images} 張）</a></>}</div> : <div className="hint muted">還沒匯出過。</div>}
+          </div>
+          <div className="actions">
+            <button className="primary big" onClick={doExport} disabled={busy || !(full ?? d).trainable}>匯出 {(full ?? d).trainable} 題</button>
+            <div className="stat"><span>已確認 <b>{(full ?? d).trainable}</b></span><span>驗證集 <b>{(full ?? d).val_images}</b> 張</span></div>
+          </div>
         </div>
       )}
       </Fade>

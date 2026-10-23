@@ -190,10 +190,14 @@ table.score .pill { font-family: var(--mono); padding: 0 6px; }
 .chip-btn { padding: 2px 8px; font-size: 12px; border-radius: 999px; color: var(--muted); }
 .chip-btn.on { background: var(--acc-soft); border-color: var(--acc); color: var(--fg); }
 
-/* ① dataset page: the grid flexes, the action column keeps its width and stays in view */
-.grid-2.ds { grid-template-columns: minmax(0, 1fr) 420px; }
-.ds-side { position: sticky; top: 58px; }
-@media (max-width: 1100px) { .grid-2.ds { grid-template-columns: 1fr; } .ds-side { position: static; } }
+/* every screen: content on the left, one action column on the right whose first element is
+   the primary button — same place on every page (docs/ui-spec §1) */
+.page { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; align-items: start; }
+.actions { position: sticky; top: 58px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.actions > .primary.big, .actions > .row > .primary.big, .actions > .btn.primary.big { width: 100%; }
+.actions > .row > .primary.big { flex: 1; width: auto; }
+.play-left { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .page, .play-left { grid-template-columns: 1fr; } .actions { position: static; } }
 
 /* ② review: quick answers and the key bar */
 .yn { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

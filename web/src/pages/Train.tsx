@@ -45,8 +45,8 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
     try { await api.train({ name: nameFinal, steps: steps === "" ? autoSteps : Number(steps), lr: parseFloat(lr), rank, dataset_ids: picked, region_head: regionHead }); say(`開始訓練 ${nameFinal}`); setName(""); load(); } catch (err) { say(String(err), "bad", { sticky: true }); }
   };
   return (
-    <div className="col" style={{ maxWidth: 1100 }}>
-      <div className="grid-2">
+    <div className="page">
+      <div className="col">
         <div className="panel col">
           <h3>訓練集</h3>
           {datasets.length === 0 && <div className="muted hint">還沒有確認過的題。</div>}
@@ -63,16 +63,16 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
           {adv && <div className="row card"><label className="f">LoRA rank<select value={rank} onChange={(ev) => setRank(+ev.target.value)}>{[8, 16, 24, 32].map((r) => <option key={r} value={r}>{r}</option>)}</select></label><label className="row hint"><input type="checkbox" checked={regionHead} onChange={(ev) => setRegionHead(ev.target.checked)} /> 也訓 region head（座標頭；開了 Orin 載不了）</label></div>}
           <div className="note">LoRA 只掛文字 MLP（Orin 的 Photon 可直接載入）。預設步數＝圖數×2（100–1000）；{autoSteps} 步約 {Math.round(autoSteps / 36)} 分鐘，訓完自動在 CCTV held-out 與各資料集的驗證集評估。</div>
         </div>
-        <div className="col">
+        <Stagger className="col">{runs.filter((r) => r.state !== "cancelled").slice(0, 3).map((r) => <Item key={r.name}><RunCard r={r} go={go} /></Item>)}</Stagger>
+      </div>
+      <div className="actions">
           <button className="primary big" onClick={start} disabled={blockers.length > 0}>{running ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : blockers.length ? "還不能訓練" : `開始訓練（${rows} 筆，${steps === "" ? autoSteps : steps} 步）`}</button>
           {blockers.map((b) => <Pop key={b} className="bad hint">✗ {b}</Pop>)}
           {warns.map((w) => <Pop key={w} className="warn hint">⚠ {w}</Pop>)}
           {!blockers.length && <div className="small muted">會記為 {reviewer || "—"} 啟動；訓完自動評估 held-out 與驗證集。</div>}
           <Stagger className="col">{runs.map((r) => <Item key={r.name}><RunRow r={r} onDelete={() => setAskDel(r.name)} onCancel={async () => { await api.cancelRun(r.name).catch((err) => say(String(err), "bad")); say("取消中…", "warn"); }} /></Item>)}</Stagger>
           {runs.length === 0 && <div className="empty">還沒訓練過。</div>}
-        </div>
       </div>
-      <Stagger className="col">{runs.filter((r) => r.state !== "cancelled").slice(0, 3).map((r) => <Item key={r.name}><RunCard r={r} go={go} /></Item>)}</Stagger>
       <ConfirmDialog open={!!askDel} title={`刪除 ${askDel}？`} body="adapter、log、評估報告都會刪。" confirmText="刪除" danger onCancel={() => setAskDel(null)} onConfirm={async () => { await api.deleteRun(askDel!).catch((err) => say(String(err), "bad")); setAskDel(null); load(); }} />
     </div>
   );
