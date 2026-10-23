@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { api, defaultPrompt, emptyLabel, fmt, fmtDelta, phaseLabel, skillLabel, suiteLabel, summary, type Dataset, type HeldoutPair, type ImageRow, type Model, type Pred, type Run, type Skill } from "../api";
-import Canvas from "../components/Canvas";
+import Canvas, { type View } from "../components/Canvas";
 import ImagePicker from "../components/ImagePicker";
 import TextDiff from "../components/TextDiff";
 import { Pill, useToast } from "../components/ui";
@@ -96,6 +96,8 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
   const [n, setN] = useState(0);
   const [cur, setCur] = useState(0);
   const [err, setErr] = useState("");
+  const [view, setView] = useState<View | null>(null); // both canvases zoom and pan together
+  useEffect(() => setView(null), [cur, run, suite]);
   const manifestStem = (s: string) => (s.startsWith("val-") ? `val-${s.slice(4)}` : s);
   useEffect(() => {
     if (!run || !suite) return;
@@ -124,11 +126,11 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
       </div>
       {pairs && (
           <Fade k={`${run}/${suite}/${cur}`} style={{ minWidth: 0 }}>
-            {p && <div className="row hint" style={{ marginBottom: 6 }}><Pill kind={better(p) ? "ok" : "bad"}>{better(p) ? "新模型較好" : "新模型較差"}</Pill><span className="muted">{p.row.skill} · {p.row.object ?? p.row.question ?? "caption"} · 第 {cur + 1}/{shown.length} 題 · ← → 換題</span></div>}
+            {p && <div className="row hint" style={{ marginBottom: 6 }}><Pill kind={better(p) ? "ok" : "bad"}>{better(p) ? "新模型較好" : "新模型較差"}</Pill><span className="muted">{p.row.skill} · {p.row.object ?? p.row.question ?? "caption"} · 第 {cur + 1}/{shown.length} 題 · ← → 換題 · 兩張圖同步縮放</span></div>}
             {p && (p.row.skill === "detect" || p.row.skill === "point") && (
               <div className="grid-2">
-                <div><div className="muted hint">base（實線）vs 正解（虛線）· {score(p.base)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.base.pred)} alt={gt(p.row)} readOnly labels={{ main: "base", alt: "正解" }} height={H} compact /></div>
-                <div><div className="muted hint">{run}（實線）vs 正解（虛線）· {score(p.adapter)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.adapter.pred)} alt={gt(p.row)} readOnly labels={{ main: run, alt: "正解" }} height={H} compact /></div>
+                <div><div className="muted hint">base（實線）vs 正解（虛線）· {score(p.base)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.base.pred)} alt={gt(p.row)} readOnly labels={{ main: "base", alt: "正解" }} height={H} compact sync={view} onSync={setView} /></div>
+                <div><div className="muted hint">{run}（實線）vs 正解（虛線）· {score(p.adapter)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.adapter.pred)} alt={gt(p.row)} readOnly labels={{ main: run, alt: "正解" }} height={H} compact sync={view} onSync={setView} /></div>
               </div>
             )}
             {p && p.row.skill !== "detect" && p.row.skill !== "point" && (
@@ -170,6 +172,7 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [saveTo, setSaveTo] = useState<number | "">("");
   const [label, setLabel] = useState<Pred | null>(null);
+  const [view, setView] = useState<View | null>(null);
   useEffect(() => { api.datasets().then(setDatasets).catch(() => undefined); }, []);
   useEffect(() => { if (!image) api.images().then((im) => { if (im.length) setImage(im[0]); }).catch(() => undefined); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setRes(null); setLabel(null); }, [image?.id, skill]);
@@ -197,8 +200,8 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
         {image && <div className="row hint"><span className="muted">{image.path.split("/").slice(-1)[0]}</span>{res && <><Pill kind="grey">base · {summary(pa)} · {res.base.ms} ms</Pill>{b !== "base" && res[b] && <Pill kind="ok">{lbl(b)} · {summary(pb)} · {res[b].ms} ms</Pill>}</>}{busy && <span className="muted"><i className="spin" />模型在答…</span>}</div>}
         {image && res && spatial && (b === "base" ? <Canvas src={src} skill={skill} value={label ?? pa} onChange={(p) => setLabel(p)} labels={{ main: "base（可改後存）" }} height={H} compact /> : (
           <div className="grid-2">
-            <div><div className="muted hint">base</div><Canvas src={src} skill={skill} value={pa} alt={pb} readOnly labels={{ main: "base", alt: lbl(b) }} height={H} compact /></div>
-            <div><div className="muted hint">{lbl(b)}</div><Canvas src={src} skill={skill} value={pb} alt={pa} readOnly labels={{ main: lbl(b), alt: "base" }} height={H} compact /></div>
+            <div><div className="muted hint">base</div><Canvas src={src} skill={skill} value={pa} alt={pb} readOnly labels={{ main: "base", alt: lbl(b) }} height={H} compact sync={view} onSync={setView} /></div>
+            <div><div className="muted hint">{lbl(b)}</div><Canvas src={src} skill={skill} value={pb} alt={pa} readOnly labels={{ main: lbl(b), alt: "base" }} height={H} compact sync={view} onSync={setView} /></div>
           </div>
         ))}
         {image && res && !spatial && (

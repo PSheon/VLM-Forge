@@ -144,17 +144,8 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     <div className="rv">
       <div className="rv-top row">
         <span className="muted hint">{review.image.path.split("/").slice(-1)[0]}</span>
-        {items.length <= 24 ? (
-          <span className="strip">{items.map((x, i) => <i key={x.id} className={`${i === idx ? "cur " : ""}${x.status !== "pending" ? "done" : x.verdict === "fix" ? "fix" : x.verdict === "accept" ? "acc" : "none"}`} title={itemTitle(x)} onClick={() => goTo(i)} />)}</span>
-        ) : (
-          <span className="row hint">
-            <Pill kind="bad">不一致 {items.filter((x) => x.status === "pending" && x.verdict === "fix").length}</Pill>
-            <Pill kind="ok">一致 {items.filter((x) => x.status === "pending" && x.verdict === "accept").length}</Pill>
-            <Pill kind="grey">未比對 {items.filter((x) => x.status === "pending" && !x.verdict).length}</Pill>
-            <Pill kind="grey">已存 {items.filter((x) => x.status !== "pending").length}</Pill>
-          </span>
-        )}
-        <span className="muted hint">題 {idx + 1}/{items.length} · 還有 {pendingLeft} 題 · 待看 {sum?.images_pending ?? 0} 張</span>
+        <Pill kind={pendingLeft ? "warn" : "ok"}>這張還有 {pendingLeft} 題</Pill>
+        <span className="muted hint">待看 {sum?.images_pending ?? 0} 張</span>
         <span style={{ marginLeft: "auto" }} className="row"><button onClick={() => setGrid(!grid)} title="G">所有圖</button></span>
       </div>
       <div className="page">
@@ -205,6 +196,9 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
           <div className="row hint muted">
             <button onClick={confirmRest} title="Shift+Enter">剩下 {pendingLeft} 題全照畫面存</button>
             <button onClick={() => guarded(() => nextImage(review.image.id))} title="S">跳過這張</button>
+          </div>
+          <div className="qlist">
+            {items.map((x, i) => <div key={x.id} className={`it${i === idx ? " cur" : ""}${x.status !== "pending" ? " done" : ""}`} onClick={() => goTo(i)} title={itemTitle(x)}><i className={`dot ${x.status !== "pending" ? "done" : x.verdict === "fix" ? "fix" : x.verdict === "accept" ? "acc" : "none"}`} /><span className="t">{itemTitle(x)}</span><span className="muted small">{x.status !== "pending" ? statusLabel[x.status] : x.verdict === "fix" ? "不一致" : x.verdict === "accept" ? (x.spot ? "抽查" : "一致") : "未比對"}</span></div>)}
           </div>
           <div className="hint muted">{reviewer} 認領中{claimedOther ? `（${claimedOther} 也在看）` : ""}</div>
         </Fade>
