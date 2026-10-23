@@ -2,6 +2,15 @@
 
 All notable changes to VLM-Forge. Versions follow [SemVer](https://semver.org/); dates are when the version reached `main`.
 
+## [Unreleased]
+
+### Fixed
+- **Count answers given by pointing.** Moondream 3 sometimes answers "How many forklifts are there?" with `There is` + a grounded point (the engine does the same); the point was dropped and the answer read "There is ". `Moondream.query_grounded()` keeps the points, the agreement rule counts them, and the UI shows `There is⟨1 個點⟩`. Held-out scoring keeps the plain `query()`, byte-identical to the engine.
+- **Re-running triage** no longer re-draws the spot check (it had auto-passed 128 of 149 sampled questions on a half-reviewed batch).
+
+### Added
+- `web/e2e/smoke.mjs` (`npm run e2e`): the UI contract of docs/ui-spec §1 as a read-only Playwright check.
+
 ## [0.3.0] — 2026-10-23
 
 A layout pass: one visual language, more room for the image, fewer buttons.

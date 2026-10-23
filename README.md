@@ -114,9 +114,10 @@ Adapter file: `{"lora_state_dict", "rank", "alpha", "region_head"?}` — keys `t
 | `src/vlmforge/server/` | FastAPI: workspace (SQLite), datasets, per-question triage, one GPU worker, the training pipeline, the Orin bundle |
 | `web/` | Vite + React + TypeScript UI; `docs/ui-spec.md` is its spec, `web/src/components/ui.tsx` the shared pieces |
 | `tests/` | CPU-only unit tests (`uv run pytest`) |
+| `web/e2e/smoke.mjs` | UI smoke test against a running server (`cd web && npm run e2e`): one primary button per view, level title / tool rows, no tab bars, no console errors, Esc goes back — in light, dark and 1024 px |
 | `model-cache/`, `runs/`, `workspace/`, `data/` | not in git |
 
-Branches: `feat/* → dev → main`. `ruff` for lint and format, `uv` for the environment. Each version is tagged and listed in [CHANGELOG.md](CHANGELOG.md).
+Branches: `feat/* → dev → main`. `ruff` for lint and format, `uv` for the environment. UI changes run `npm run e2e` (read-only: it never saves an answer or runs inference) before they merge. Each version is tagged and listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Status
 
