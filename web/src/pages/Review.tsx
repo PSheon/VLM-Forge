@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
 import Canvas from "../components/Canvas";
-import { Dialog, useToast } from "../components/ui";
+import { Dialog, Pill, useToast } from "../components/ui";
 import type { Step } from "../App";
 
 export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void }) {
@@ -127,7 +127,16 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     <div className="rv">
       <div className="rv-top row">
         <span className="muted hint">{review.image.path.split("/").slice(-1)[0]}</span>
-        <span className="strip">{items.map((x, i) => <i key={x.id} className={`${i === idx ? "cur " : ""}${x.status !== "pending" ? "done" : x.verdict === "fix" ? "fix" : x.verdict === "accept" ? "acc" : "none"}`} title={itemTitle(x)} onClick={() => goTo(i)} />)}</span>
+        {items.length <= 24 ? (
+          <span className="strip">{items.map((x, i) => <i key={x.id} className={`${i === idx ? "cur " : ""}${x.status !== "pending" ? "done" : x.verdict === "fix" ? "fix" : x.verdict === "accept" ? "acc" : "none"}`} title={itemTitle(x)} onClick={() => goTo(i)} />)}</span>
+        ) : (
+          <span className="row hint">
+            <Pill kind="bad">不一致 {items.filter((x) => x.status === "pending" && x.verdict === "fix").length}</Pill>
+            <Pill kind="ok">一致 {items.filter((x) => x.status === "pending" && x.verdict === "accept").length}</Pill>
+            <Pill kind="grey">未比對 {items.filter((x) => x.status === "pending" && !x.verdict).length}</Pill>
+            <Pill kind="grey">已存 {items.filter((x) => x.status !== "pending").length}</Pill>
+          </span>
+        )}
         <span className="muted hint">題 {idx + 1}/{items.length} · 還有 {pendingLeft} 題 · 待看 {sum?.images_pending ?? 0} 張</span>
         <span style={{ marginLeft: "auto" }} className="row"><button onClick={() => setGrid(!grid)} title="G">所有圖</button></span>
       </div>
@@ -165,7 +174,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
             <button onClick={confirmRest} title="Shift+Enter">剩下 {pendingLeft} 題全照畫面存</button>
             <button onClick={() => guarded(() => nextImage(review.image.id))} title="N">跳過這張</button>
           </div>
-          <div className="hint muted">認領中：{reviewer}{claimedOther ? `（${claimedOther} 也在看）` : ""} · 10 分鐘內別人看不到這張</div>
+          <div className="hint muted">{reviewer} 認領中{claimedOther ? `（${claimedOther} 也在看）` : ""}</div>
         </aside>
       </div>
       <Dialog open={!!pendingJump} onClose={() => setPendingJump(null)}>
