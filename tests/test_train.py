@@ -96,3 +96,28 @@ def test_lr_schedule():
     o = {"lr": 1.0, "warmup": 2, "steps": 10, "min_lr_ratio": 0.1}
     assert lr_at(0, o) == 0.5 and lr_at(1, o) == 1.0
     assert abs(lr_at(10, o) - 0.1) < 1e-9
+
+
+def test_region_head_roundtrip_without_weights():
+    """head_state_dict / load_head / RegionHead agree on shapes (no model file needed)."""
+    from vlmforge.model.text import COORD_BINS, D, RegionHead, RegionModel
+
+    r = RegionModel.__new__(RegionModel)
+    r.ln = (torch.ones(D), torch.zeros(D))
+    r.dec_w = torch.randn(COORD_BINS + 2 * 1024, D)
+    r.dec_b = torch.randn(COORD_BINS + 2 * 1024)
+    sd = r.head_state_dict()
+    assert set(sd) == set(RegionModel.HEAD_KEYS)
+    head = RegionHead(r)
+    sd2 = head.state_dict_upstream(dtype=torch.float32)
+    assert all(torch.equal(sd[k], sd2[k]) for k in sd)
+    r.load_head({k: v * 2 for k, v in sd.items()})
+    assert torch.equal(
+        r.dec_w,
+        2
+        * sd2["region_model.coordinate_head.weight"].new_tensor(
+            torch.cat(
+                [sd2["region_model.coordinate_head.weight"], sd2["region_model.size_head.weight"]]
+            )
+        ),
+    )

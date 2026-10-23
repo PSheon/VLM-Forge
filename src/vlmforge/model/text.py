@@ -472,6 +472,19 @@ class RegionModel:
         "region_model.size_head.bias",
     )
 
+    def head_state_dict(self) -> dict[str, torch.Tensor]:
+        """The decoder side (layer norm + coordinate / size heads) under upstream names: what
+        the UI engine keeps to restore the base after an adapter's ``load_head``."""
+        parts = (
+            self.ln[0],
+            self.ln[1],
+            self.dec_w[:COORD_BINS],
+            self.dec_b[:COORD_BINS],
+            self.dec_w[COORD_BINS:],
+            self.dec_b[COORD_BINS:],
+        )
+        return dict(zip(self.HEAD_KEYS, parts, strict=True))
+
     def load_head(self, sd: dict[str, torch.Tensor]) -> None:
         """Replace the decoder side with a fine-tuned one (an adapter's ``region_head``)."""
         dt, dev = self.dec_w.dtype, self.dec_w.device
