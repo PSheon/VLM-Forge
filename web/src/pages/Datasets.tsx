@@ -143,6 +143,17 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const lowMem = freeGb !== null && !judgeLoaded && freeGb < needGb;
   const labelText = interrupted(batch) ? "先把上一輪接著跑完" : !judgeOk ? "出題模型缺，不能標" : gpuBusy ? "排隊中…（GPU 忙）" : lowMem ? `GPU 只剩 ${freeGb!.toFixed(0)} GB（出題要 ${needGb} GB），等別的訓練結束` : unlabelled === 0 ? "沒有新圖" : `標註新加的 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張`;
   const total = (full ?? d).images;
+  const pendingImgs = (full ?? d).images_pending, trainable = (full ?? d).trainable;
+  const labelBlocked = !judgeOk || gpuBusy || lowMem || (mode !== "auto" && nFixed === 0);
+  // one orange button: the next thing to do (docs/ui-spec §3)
+  const cta: { text: string; run?: () => void; disabled?: boolean } | null = interrupted(batch) ? null
+    : total === 0 ? { text: "選照片加進來", run: () => fileInput.current?.click(), disabled: busy }
+    : running ? { text: `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}`, disabled: true }
+    : unlabelled > 0 && !labelBlocked ? { text: labelText, run: label, disabled: busy }
+    : pendingImgs > 0 ? { text: `去檢查（還有 ${pendingImgs} 張）→`, run: () => setTab("review") }
+    : unlabelled > 0 ? { text: labelText, disabled: true }
+    : trainable > 0 ? { text: `已確認 ${trainable} 題 → 去訓練`, run: () => go("train") }
+    : null;
   const skippedNote = batch?.job?.student_error ? `模型沒作答（${batch.job.student_error}），這批全部交給你看` : null;
   const [pillText, pillKind] = statusPill(full ?? d);
   const tabs: [Tab, string][] = [["images", `圖片 ${full?.images ?? d.images}`], ["review", `檢查${(full ?? d).images_pending ? ` ${(full ?? d).images_pending}` : ""}`], ["settings", "設定"], ["export", "匯出"]];
@@ -158,7 +169,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
       <div className="tabs big">{tabs.map(([k, l]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)}>{l}</button>)}</div>
       <Fade k={tab}>
       {tab === "images" && (
-        <div className="grid-2">
+        <div className="grid-2 ds">
           <div className="col">
             <div className={`drop${drag ? " on" : ""}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}>
               把照片拖到這裡，或 <button onClick={() => fileInput.current?.click()} disabled={busy}>選檔案</button>（可多張、可 zip）
@@ -171,14 +182,17 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
             <div className="small muted">{grid.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 點一張進去檢查` : "還沒有圖"}</div>
             <Grid cells={grid} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
-          <div className="col">
-            <Pop show={total === 0} className="next"><b>下一步：把照片丟進來</b><span className="hint">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</span></Pop>
-            {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
-            <Pop show={total > 0 && unlabelled > 0 && !running && !interrupted(batch)} className="next"><b>下一步：讓 AI 導師先標 {n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張</b><span className="hint">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}，約 20 秒/張；一致的自動通過，不一致的到「檢查」。</span></Pop>
-            {total > 0 && <button className="primary big" onClick={label} disabled={busy || running || interrupted(batch) || !judgeOk || gpuBusy || lowMem || unlabelled === 0 || (mode !== "auto" && nFixed === 0)}>{running ? `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}` : labelText}</button>}
+          <div className="col ds-side">
+            {cta && <button className="primary big" onClick={cta.run} disabled={cta.disabled}>{cta.text}</button>}
+            <Pop show={total === 0} className="hint muted">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</Pop>
+            <Pop show={total > 0 && unlabelled > 0 && !running && !interrupted(batch) && !labelBlocked} className="hint muted">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}，約 20 秒/張；一致的自動通過，不一致的才要你看。</Pop>
             {total > 0 && mode !== "auto" && nFixed === 0 && <div className="bad hint">「設定」裡還沒有有效的指定題目</div>}
-            {(full ?? d).images_pending > 0 && !running && <button onClick={() => setTab("review")}>去檢查（還有 {(full ?? d).images_pending} 張）→</button>}
-            {(full ?? d).trainable > 0 && <button onClick={() => go("train")}>已確認 {(full ?? d).trainable} 題 → 去訓練</button>}
+            <div className="row hint">
+              {cta?.run !== label && unlabelled > 0 && !running && !interrupted(batch) && <span className="muted">{labelBlocked ? labelText : ""}</span>}
+              {cta && !cta.text.startsWith("去檢查") && pendingImgs > 0 && !running && <button className="ghost" onClick={() => setTab("review")}>去檢查（{pendingImgs} 張）→</button>}
+              {cta && !cta.text.includes("去訓練") && trainable > 0 && <button className="ghost" onClick={() => go("train")}>去訓練（{trainable} 題）→</button>}
+            </div>
+            {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
             {full && full.batches && full.batches.length > 1 && (
               <div className="col"><strong className="small">批次紀錄</strong>{full.batches.slice(1, 6).map((b) => <div key={b.id} className="small muted">{b.created_at.slice(5, 16).replace("T", " ")} · {b.total} 題 · {b.job?.state === "cancelled" ? "取消" : b.job?.state === "error" ? "失敗" : "完成"} · 一致 {b.verdicts?.accept ?? 0} · 不一致 {b.verdicts?.fix ?? 0}</div>)}</div>
             )}
@@ -249,7 +263,7 @@ function BatchCard({ b, onCancel, onResume, busy, skippedNote }: { b: Batch; onC
         </>
       )}
       {state === "running" && <><Bar done={j!.done} total={j!.total} /><div className="small">{phaseLabel(j!.phase)} {j!.done}/{j!.total}{left !== null ? `（約還要 ${left} 分鐘）` : j!.done === 0 ? "（載入出題模型中…）" : ""}</div></>}
-      {state === "done" && <div className="small">{b.total} 題 · 一致 {b.verdicts?.accept ?? 0} · 不一致 {b.verdicts?.fix ?? 0} · 自動通過 {b.counts.auto ?? 0} · 還要看 {b.counts.pending ?? 0}</div>}
+      {state === "done" && <div className="small">{b.total} 題 · 一致 {b.verdicts?.accept ?? 0} · 不一致 {b.verdicts?.fix ?? 0} · 自動通過 {b.counts.auto ?? 0} · 還要看 {b.counts.pending ?? 0} 題{b.images_pending !== undefined ? `（${b.images_pending} 張）` : ""}</div>}
       {state === "cancelled" && <div className="small warn-text">已取消：出好的 {b.total} 題保留</div>}
       {state === "error" && <div className="small bad">失敗（{phaseLabel(j?.phase)}）：{j?.error}</div>}
       {skippedNote && <div className="warn hint">{skippedNote}</div>}

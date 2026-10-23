@@ -1,6 +1,6 @@
 // ② 檢查 (docs/ui-spec §4): one image, one question at a time; every key saves and moves on.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
 import Canvas from "../components/Canvas";
 import { Dialog, Pill, useToast } from "../components/ui";
@@ -68,12 +68,23 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     else { say("這張看完了 ✓", "ok", { ms: 1200 }); refresh(); setTimeout(() => nextImage(review!.image.id), 300); }
   };
 
-  const accept = useCallback(async () => {
+  const acceptWith = useCallback(async (p?: Pred) => {
     if (!it || !review) return;
-    const final = label ?? emptyLabel(it.skill);
+    const final = p ?? label ?? emptyLabel(it.skill);
     const changed = JSON.stringify(final) !== JSON.stringify(it.pred);
     try { const saved = await api.review(it.id, changed ? "correct" : "approve", reviewer, final); say(changed ? "已存（你的修正）✓" : "已存 ✓"); advance([{ ...it, ...saved }]); } catch (e) { say(String(e), "bad"); }
   }, [it, review, label, reviewer]); // eslint-disable-line react-hooks/exhaustive-deps
+  const accept = useCallback(() => acceptWith(), [acceptWith]);
+  // question type decides the answer widget: yes/no → two keys, count → a number, else text
+  const qt = it?.skill === "query" ? (/how many|count|number of/i.test(it.prompt) ? "count" : /^(is|are|does|do|can|has|have|was|were)\b/i.test(it.prompt) ? "yesno" : "text") : null;
+  const setCount = (v: number) => { const n = Math.max(0, Math.round(v)); setLabel({ text: String(n) }); setDirty(true); };
+  const [pressed, setPressed] = useState("");
+  const focus = useMemo(() => {
+    if (!it || (it.skill !== "detect" && it.skill !== "point")) return null;
+    const pb = (p: number[]) => [p[0] - 0.02, p[1] - 0.02, p[0] + 0.02, p[1] + 0.02];
+    const b = [...(it.label?.boxes ?? it.pred?.boxes ?? []), ...(it.teacher?.boxes ?? []), ...(it.label?.points ?? it.pred?.points ?? []).map(pb), ...(it.teacher?.points ?? []).map(pb)];
+    return b.length ? b : null;
+  }, [it?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const discard = useCallback(async () => {
     if (!it) return;
     try { const saved = await api.review(it.id, "discard", reviewer, null); say("已丟棄", "warn"); advance([{ ...it, ...saved }]); } catch (e) { say(String(e), "bad"); }
@@ -95,10 +106,15 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
-      if (typing) { if (e.key === "Escape") t.blur(); if (e.key === "Enter" && !e.shiftKey && t.tagName === "TEXTAREA") { e.preventDefault(); t.blur(); accept(); } return; }
+      if (typing) { if (e.key === "Escape") t.blur(); if (e.key === "Enter" && !e.shiftKey && (t.tagName === "TEXTAREA" || t.classList.contains("count"))) { e.preventDefault(); t.blur(); accept(); } return; }
       if (!review || pendingJump) return;
+      if (!e.metaKey && !e.ctrlKey) { setPressed(e.key.length === 1 ? e.key.toUpperCase() : e.key); window.setTimeout(() => setPressed(""), 260); }
       if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); confirmRest(); }
       else if (e.key === "Enter") { e.preventDefault(); accept(); }  // Space is the canvas pan key
+      else if (qt === "yesno" && (e.key === "y" || e.key === "Y")) acceptWith({ text: "yes" });
+      else if (qt === "yesno" && (e.key === "n" || e.key === "N")) acceptWith({ text: "no" });
+      else if (qt === "count" && /^[0-9]$/.test(e.key)) { const cur = label?.text ?? ""; setCount(Number((/^\d+$/.test(cur) && pressed ? cur : "") + e.key)); }
+      else if (qt === "count" && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); setCount(Number(label?.text ?? 0) + (e.key === "ArrowUp" ? 1 : -1)); }
       else if (e.key === "d" || e.key === "D") discard();
       else if (e.key === "1" && it?.teacher) edit(structuredClone(it.teacher), "改用預標");
       else if (e.key === "2" && it?.pred) edit(structuredClone(it.pred), "改用模型答案");
@@ -106,7 +122,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       else if ((e.key === "z" || e.key === "Z") && it) { setLabel(initial(it)); setDirty(false); say("已還原"); }
       else if (e.key === "ArrowRight" && !e.shiftKey && !spatialSelected()) goTo(idx + 1);
       else if (e.key === "ArrowLeft" && !e.shiftKey && !spatialSelected()) goTo(idx - 1);
-      else if (e.key === "n" || e.key === "N") guarded(() => nextImage(review.image.id));
+      else if (e.key === "s" || e.key === "S") guarded(() => nextImage(review.image.id));
       else if (e.key === "g" || e.key === "G") setGrid((g) => !g);
       else if (e.key === "Escape") setGrid(false);
     };
@@ -142,7 +158,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
         <span style={{ marginLeft: "auto" }} className="row"><button onClick={() => setGrid(!grid)} title="G">所有圖</button></span>
       </div>
       <div className="rv-main">
-        <Canvas src={api.imageUrl(review.image.id, 2048)} skill={it.skill} value={label} onChange={(p, what) => edit(p, what)} alt={spatial ? it.teacher : null} labels={spatial ? { main: "目前（可改）", alt: "預標" } : undefined} height="calc(100vh - 150px)" compact />
+        <Canvas src={api.imageUrl(review.image.id, 2048)} skill={it.skill} value={label} onChange={(p, what) => edit(p, what)} alt={spatial ? it.teacher : null} labels={spatial ? { main: "目前（可改）", alt: "預標" } : undefined} fitAspect={{ maxOffset: 215 }} focus={focus} focusKey={it.id} compact />
         <Fade k={it.id} className="rv-side" y={10}>
           <div className={`q ${it.verdict === "fix" ? "q-fix" : it.verdict === "accept" ? "q-acc" : ""}`}>
             <div className="muted hint">{it.verdict === "fix" ? "● 不一致，請你看" : it.verdict === "accept" ? "○ 一致" : "– 未比對（模型沒作答）"}{it.spot ? " · 抽查" : ""}{it.status !== "pending" ? ` · ${statusLabel[it.status]}${it.reviewer ? `（${it.reviewer}）` : ""}` : ""}</div>
@@ -158,7 +174,16 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
             </>
           ) : (
             <>
-              <textarea ref={textRef} value={label?.text ?? ""} onChange={(e) => { setLabel({ text: e.target.value }); setDirty(true); }} style={{ minHeight: it.skill === "caption" ? 110 : 64, fontSize: it.skill === "caption" ? 14 : 16 }} placeholder="答案" />
+              {qt === "yesno" && (
+                <div className="yn">
+                  <button className={`big${(label?.text ?? "").toLowerCase().startsWith("yes") ? " cur" : ""}`} onClick={() => acceptWith({ text: "yes" })}><kbd>Y</kbd> yes 是</button>
+                  <button className={`big${(label?.text ?? "").toLowerCase().startsWith("no") ? " cur" : ""}`} onClick={() => acceptWith({ text: "no" })}><kbd>N</kbd> no 否</button>
+                </div>
+              )}
+              {qt === "count" && (
+                <div className="row"><button onClick={() => setCount(Number(label?.text ?? 0) - 1)} title="↓">−</button><input className="count" type="number" min={0} value={/^\d+$/.test(label?.text ?? "") ? label!.text : ""} placeholder={label?.text ?? "?"} onChange={(e) => setCount(Number(e.target.value))} /><button onClick={() => setCount(Number(label?.text ?? 0) + 1)} title="↑">＋</button><span className="muted hint">直接按數字、↑↓ 加減、Enter 存</span></div>
+              )}
+              {qt !== "yesno" && qt !== "count" && <textarea ref={textRef} value={label?.text ?? ""} onChange={(e) => { setLabel({ text: e.target.value }); setDirty(true); }} style={{ minHeight: it.skill === "caption" ? 110 : 64, fontSize: it.skill === "caption" ? 14 : 16 }} placeholder="答案" />}
               {it.skill === "caption" && unsupported.length > 0 && <div className="row hint"><span className="muted">圖裡沒有：</span>{unsupported.map((p) => <span key={p} className="chip bad" title="點 ✕ 從文字刪掉">{p}<button onClick={() => removePhrase(p)} aria-label="刪掉">✕</button></span>)}</div>}
               <div className="row">
                 {it.teacher && <button onClick={() => edit(structuredClone(it.teacher!), "改用預標")} title={it.teacher.text}><kbd>1</kbd> 預標：{short(it.teacher.text)}</button>}
@@ -173,11 +198,12 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
           </div>
           <div className="row hint muted">
             <button onClick={confirmRest} title="Shift+Enter">剩下 {pendingLeft} 題全照畫面存</button>
-            <button onClick={() => guarded(() => nextImage(review.image.id))} title="N">跳過這張</button>
+            <button onClick={() => guarded(() => nextImage(review.image.id))} title="S">跳過這張</button>
           </div>
           <div className="hint muted">{reviewer} 認領中{claimedOther ? `（${claimedOther} 也在看）` : ""}</div>
         </Fade>
       </div>
+      <KeyBar pressed={pressed} keys={[["Enter", changed ? "存修正" : "沒問題"], ...(qt === "yesno" ? [["Y", "yes"], ["N", "no"]] as [string, string][] : qt === "count" ? [["0–9", "數字"], ["↑↓", "加減"]] as [string, string][] : []), ["D", "丟棄"], ...(it.teacher ? [["1", "用預標"]] as [string, string][] : []), ...(it.pred ? [["2", "用模型"]] as [string, string][] : []), ...(spatial ? [["Tab", "選框"], ["Del", "刪框"], ["F", "全圖"]] as [string, string][] : qt === "text" || it.skill === "caption" ? [["E", "改文字"]] as [string, string][] : []), ["←→", "換題"], ["Shift+Enter", `剩 ${pendingLeft} 題全存`], ["S", "跳過"], ["G", "所有圖"]]} />
       <Dialog open={!!pendingJump} onClose={() => setPendingJump(null)}>
         <h2>有改動還沒存</h2>
         <div className="hint">要丟掉這題的改動嗎？</div>
@@ -203,6 +229,12 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       )}
     </div>
   );
+}
+
+/** The keys that work right now, one line at the bottom; the one just pressed lights up. */
+function KeyBar({ keys, pressed }: { keys: [string, string][]; pressed: string }) {
+  const on = (k: string) => pressed && (k === pressed || k.split("–").includes(pressed) || (k === "←→" && (pressed === "ArrowLeft" || pressed === "ArrowRight")) || (k === "↑↓" && (pressed === "ArrowUp" || pressed === "ArrowDown")) || (k === "0–9" && /^[0-9]$/.test(pressed)) || (k === "Del" && (pressed === "Delete" || pressed === "Backspace")));
+  return <div className="keybar">{keys.map(([k, l]) => <span key={k}><kbd className={on(k) ? "on" : ""}>{k}</kbd> {l}</span>)}</div>;
 }
 
 const statusLabel: Record<Item["status"], string> = { pending: "待看", auto: "自動通過", approved: "已確認", corrected: "已修正", discarded: "丟棄" };

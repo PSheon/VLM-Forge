@@ -203,6 +203,10 @@ class Workspace:
         q["spot"] = self.db.execute(
             "select count(*) from items where queue_id = ? and spot = 1", (q["id"],)
         ).fetchone()[0]
+        q["images_pending"] = self.db.execute(
+            "select count(distinct image_id) from items where queue_id = ? and status = 'pending'",
+            (q["id"],),
+        ).fetchone()[0]
         return q
 
     def queues(self) -> list[dict]:
@@ -360,39 +364,47 @@ class Workspace:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def triage_images(self, queue_id: int, seed: int = 0) -> dict:
-        """Autogen triage by image: an image whose pending items were all accepted leaves the
-        human queue (items -> ``auto`` with their auto label) except a spot sample of images;
-        an image with any ``fix`` item stays pending as a whole."""
+    def triage_items(self, queue_id: int, seed: int = 0) -> dict:
+        """Autogen triage by question (GOALS §4: 一致→自動通過、不一致→人看): every pending
+        item the student and teacher agreed on gets its auto label and leaves the human
+        queue (status ``auto``), except a spot sample of max(SPOT_MIN, SPOT_FRAC) accepted
+        items that stays pending with ``spot = 1``; ``fix`` and uncompared items stay pending.
+        An image is shown to a human only while it still has pending items, so a 24-question
+        image with two disagreements costs two looks, not 24."""
         from ..autogen import auto_label
 
-        by_img: dict[str, list[dict]] = {}
-        for it in self.items(queue_id, "pending"):
-            by_img.setdefault(it["image_id"], []).append(it)
-        clean = [img for img, its in by_img.items() if all(i["verdict"] == "accept" for i in its)]
+        pend = self.items(queue_id, "pending", ALL)
+        accepted = [it for it in pend if it["verdict"] == "accept"]
         rng = random.Random(seed)
-        rng.shuffle(clean)
-        k = min(len(clean), max(SPOT_MIN, round(SPOT_FRAC * len(clean))))
-        spot, auto = set(clean[:k]), set(clean[k:])
+        order = list(range(len(accepted)))
+        rng.shuffle(order)
+        k = min(len(accepted), max(SPOT_MIN, round(SPOT_FRAC * len(accepted))))
+        spot = {accepted[i]["id"] for i in order[:k]}
         n_auto = 0
         with self.lock:
-            for img, its in by_img.items():
-                for it in its:
-                    if it["teacher"] is not None and it["verdict"] == "accept":
-                        lab = auto_label(it["skill"], it["pred"], it["teacher"])
-                        self.db.execute(
-                            "update items set label = ? where id = ?",
-                            (json.dumps(lab, ensure_ascii=False), it["id"]),
-                        )
-                    if img in spot:
-                        self.db.execute("update items set spot = 1 where id = ?", (it["id"],))
-                    elif img in auto:
-                        self.db.execute(
-                            "update items set status = 'auto' where id = ?", (it["id"],)
-                        )
-                        n_auto += 1
+            for it in accepted:
+                if it["teacher"] is not None:
+                    lab = auto_label(it["skill"], it["pred"], it["teacher"])
+                    self.db.execute(
+                        "update items set label = ? where id = ?",
+                        (json.dumps(lab, ensure_ascii=False), it["id"]),
+                    )
+                if it["id"] in spot:
+                    self.db.execute("update items set spot = 1 where id = ?", (it["id"],))
+                else:
+                    self.db.execute("update items set status = 'auto' where id = ?", (it["id"],))
+                    n_auto += 1
             self.db.commit()
-        return {"images": len(by_img), "clean": len(clean), "spot": len(spot), "auto": n_auto}
+        images = {it["image_id"] for it in pend}
+        left = {it["image_id"] for it in pend if it["verdict"] != "accept" or it["id"] in spot}
+        return {
+            "items": len(pend),
+            "accepted": len(accepted),
+            "spot": len(spot),
+            "auto": n_auto,
+            "images": len(images),
+            "images_left": len(left),
+        }
 
     def claim_next_image(
         self,

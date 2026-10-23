@@ -5,7 +5,10 @@
 //   detect: drag on empty = new box, drag a box = move, drag a corner = resize,
 //           click = select, Tab = next box, arrows nudge 1px (Shift: 10px), Delete = remove
 //   point:  click = add, drag = move, Tab = next point, arrows nudge, Delete = remove
-//   H (held) hides every overlay to see the raw image.
+//   H (held) hides every overlay to see the raw image.  F = fit the whole image again.
+// `focus` (boxes, 0-1) zooms to their union when the image or the question changes, so a
+// small box in a 2560 px frame is looked at, not hunted for. `fitAspect` sizes the viewer to
+// the image's aspect (no letterbox) up to the viewport minus `maxOffset` px.
 // `alt` draws a second, read-only set (dashed blue) — the pre-label — toggled by `showAlt`.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -31,11 +34,14 @@ export interface CanvasProps {
   height?: string;
   compact?: boolean;
   tags?: string[]; // per-box badges (e.g. TP / FP) for read-only comparisons
+  focus?: number[][] | null; // boxes to zoom to (keyed by `focusKey`)
+  focusKey?: string | number;
+  fitAspect?: { maxOffset: number; min?: number };
 }
 
 const MIN_Z = 1, MAX_Z = 12;
 
-export default function Canvas({ src, skill, value, onChange, alt, readOnly, labels, height, compact, tags }: CanvasProps) {
+export default function Canvas({ src, skill, value, onChange, alt, readOnly, labels, height, compact, tags, focus, focusKey, fitAspect }: CanvasProps) {
   const view = useRef<HTMLDivElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const img = useRef<HTMLImageElement>(null);
@@ -49,6 +55,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
   const nat = natFor && natFor.url === url ? natFor : null;
   const ready = !!nat;
   const [fit, setFit] = useState({ w: 0, h: 0, ox: 0, oy: 0 });
+  const [viewH, setViewH] = useState<number | null>(null); // fitAspect: the viewer's own height
   const [z, setZ] = useState(1);
   const [t, setT] = useState({ x: 0, y: 0 });
   const [sel, setSel] = useState<number | null>(null);
@@ -73,6 +80,27 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
   }, [nat]);
   useLayoutEffect(layout, [layout]);
   useEffect(() => { if (!view.current) return; const ro = new ResizeObserver(layout); ro.observe(view.current); return () => ro.disconnect(); }, [layout]);
+  useEffect(() => {
+    if (!fitAspect) return;
+    const size = () => { if (!view.current || !nat) return; const vw = view.current.clientWidth; const maxH = Math.max(fitAspect.min ?? 320, window.innerHeight - fitAspect.maxOffset); setViewH(Math.round(Math.min(maxH, (vw * nat.h) / nat.w))); };
+    size();
+    window.addEventListener("resize", size);
+    return () => window.removeEventListener("resize", size);
+  }, [fitAspect, nat]);
+  const fk = `${src}|${focusKey ?? ""}`;
+  useEffect(() => {
+    // zoom to the union of the focus boxes once the layout for this image is known
+    if (!fit.w || !view.current) return;
+    if (!focus || !focus.length) { setZ(1); setT({ x: 0, y: 0 }); return; } // text question: whole image
+    const u = [Math.min(...focus.map((b) => b[0])), Math.min(...focus.map((b) => b[1])), Math.max(...focus.map((b) => b[2])), Math.max(...focus.map((b) => b[3]))];
+    const bw = Math.max(0.04, u[2] - u[0]), bh = Math.max(0.04, u[3] - u[1]);
+    const vw = view.current.clientWidth, vh = view.current.clientHeight;
+    const z1 = clamp(Math.min((0.7 * vw) / (bw * fit.w), (0.7 * vh) / (bh * fit.h)), MIN_Z, 6);
+    if (z1 < 1.15) { setZ(1); setT({ x: 0, y: 0 }); return; }
+    const cx = ((u[0] + u[2]) / 2) * fit.w, cy = ((u[1] + u[3]) / 2) * fit.h;
+    setZ(z1);
+    setT(limit({ x: vw / 2 - fit.ox - cx * z1, y: vh / 2 - fit.oy - cy * z1 }, z1));
+  }, [fk, fit.w, fit.h]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setSel(null); setZ(1); setT({ x: 0, y: 0 }); setTries(0); setFailed(null); }, [src]);
   const measured = useCallback((el: HTMLImageElement | null) => { if (el && el.complete && el.naturalWidth) setNatFor({ w: el.naturalWidth, h: el.naturalHeight, url: el.getAttribute("src") ?? url }); }, [url]);
   useLayoutEffect(() => { measured(img.current); }, [measured]); // already in cache → no load event to wait for
@@ -122,6 +150,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
       if (tg && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.tagName === "SELECT")) return;
       if (e.code === "Space") { e.preventDefault(); setSpace(true); }
       if (e.key === "h" || e.key === "H") setHide(true);
+      if (e.key === "f" || e.key === "F") reset();
       if (!editable) return;
       if ((e.key === "Delete" || e.key === "Backspace") && sel !== null) { e.preventDefault(); removeSel(); }
       if (e.key === "Tab" && n > 0) { e.preventDefault(); setSel(sel === null ? 0 : (sel + 1) % n); }
@@ -177,7 +206,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
         <button onClick={() => zoomTo(clamp(z / 1.5, MIN_Z, MAX_Z))} title="縮小">−</button>
         <span className="muted num" style={{ minWidth: 44, textAlign: "center" }}>{Math.round(z * 100)}%</span>
         <button onClick={() => zoomTo(clamp(z * 1.5, MIN_Z, MAX_Z))} title="放大">＋</button>
-        <button onClick={reset} title="Ctrl+0">適應</button>
+        <button onClick={reset} title="F">適應 <kbd>F</kbd></button>
         {editable && <button className={panning ? "cur" : ""} onClick={() => setPan(!pan)} title="按住 Space 也可以拖動">移動</button>}
         {editable && sel !== null && <button onClick={removeSel}>刪除選取 <kbd>Del</kbd></button>}
         {!compact && <span className="muted">滾輪縮放 · {editable ? (skill === "detect" ? "拖曳畫框 · 拖角縮放 · 點框選取" : "點一下加點 · 拖動移動") : "拖曳移動"}</span>}
@@ -189,7 +218,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
           </span>
         )}
       </div>
-      <div className="cv-view" ref={view} style={{ height: height ?? "calc(100vh - 170px)", cursor }} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onContextMenu={(e) => e.preventDefault()}>
+      <div className="cv-view" ref={view} style={{ height: fitAspect && viewH ? viewH : height ?? "calc(100vh - 170px)", cursor }} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onContextMenu={(e) => e.preventDefault()}>
         <div className="cv-stage" ref={stage} style={{ width: fit.w, height: fit.h, left: fit.ox, top: fit.oy, transform: `translate(${t.x}px, ${t.y}px) scale(${z})`, ["--s" as string]: z }}>
           <img ref={img} src={url} className={ready ? "on" : ""} draggable={false} alt="" onLoad={(e) => measured(e.currentTarget)} onError={() => setFailed(url)} />
           {overlays && spatial && showAlt && alt?.boxes?.map((b, i) => <div key={`a${i}`} className="bx alt ro" style={boxStyle(b)}><span className="tag alt">{labels?.alt ?? "預標"} {i + 1}</span></div>)}

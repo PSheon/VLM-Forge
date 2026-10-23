@@ -79,7 +79,7 @@ def test_data_review_train_test(client, monkeypatch):
     q = wait(client, q["id"])
     assert q["job"]["state"] == "done" and q["total"] == 12  # 4 items x 3 images
     s = client.get("/api/review/summary").json()
-    assert s["images"] == 3 and s["images_pending"] == 1 and s["auto"] == 8  # 1 spot image
+    assert s["images"] == 3 and s["images_pending"] == 1 and s["auto"] == 11  # 1 spot item
     # ② review the spot image as a whole
     nx = client.get("/api/review/next-image", params={"reviewer": "P"}).json()
     assert len(nx["items"]) == 4
