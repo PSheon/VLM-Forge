@@ -93,6 +93,7 @@ export interface Dataset {
   trainable: number;
   trainable_images: number; // train-split images with at least one confirmed question
   trainable_by_skill?: Partial<Record<Skill, number>>;
+  spot?: { total: number; pending: number; agree: number; changed: number }; // teacher-trust sample
   batches?: Batch[];
   unlabelled?: number;
 }
@@ -174,8 +175,8 @@ export const api = {
   downloadUrl: (id: number, kind: "jsonl" | "zip") => `/api/datasets/${id}/download/${kind}`,
   saveDatasetItem: (id: number, body: Record<string, unknown>) => j<Item>(post(`/api/datasets/${id}/items`, body)),
   // ② review
-  nextImage: (reviewer: string, after?: string, datasetId?: number | null) =>
-    j<ImageReview | Record<string, never>>(fetch(`/api/review/next-image?reviewer=${encodeURIComponent(reviewer)}${after ? `&after=${after}` : ""}${datasetId ? `&dataset_id=${datasetId}` : ""}`)),
+  nextImage: (reviewer: string, after?: string, datasetId?: number | null, spot?: boolean) =>
+    j<ImageReview | Record<string, never>>(fetch(`/api/review/next-image?reviewer=${encodeURIComponent(reviewer)}${after ? `&after=${after}` : ""}${datasetId ? `&dataset_id=${datasetId}` : ""}${spot ? "&spot=true" : ""}`)),
   reviewImages: (status: string, datasetId?: number | null) => j<ImageSummary[]>(fetch(`/api/review/images?status=${status}${datasetId ? `&dataset_id=${datasetId}` : ""}`)),
   reviewImage: (imageId: string) => j<ImageReview>(fetch(`/api/review/image/${imageId}`)),
   review: (id: number, action: string, reviewer: string, label?: Pred | null) => j<Item>(post(`/api/items/${id}/review`, { action, reviewer, label })),
