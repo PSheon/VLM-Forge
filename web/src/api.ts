@@ -22,6 +22,7 @@ export interface Item {
   pred_model: string | null;
   label: Pred | null;
   judge: JudgeVerdict | null;
+  teacher: Pred | null;
   verdict: "accept" | "fix" | null;
   spot: number;
   status: "pending" | "auto" | "approved" | "corrected" | "discarded";
@@ -50,6 +51,8 @@ export interface Queue {
   skill: Skill;
   model: string;
   judge: string;
+  mode: "manual" | "auto";
+  config: string | null;
   note: string;
   created_at: string;
   counts: Record<string, number>;
@@ -143,6 +146,15 @@ export const api = {
   queues: () => j<Queue[]>(fetch("/api/queues")),
   queue: (id: number) => j<Queue>(fetch(`/api/queues/${id}`)),
   createQueue: (body: Record<string, unknown>) => j<Queue>(post("/api/queues", body)),
+  createAutoQueue: (body: Record<string, unknown>) => j<Queue>(post("/api/queues/auto", body)),
+  queueImages: (id: number) => j<ImageSummary[]>(fetch(`/api/queues/${id}/images`)),
+  nextImage: (id: number, reviewer: string, after?: string) =>
+    j<ImageReview | Record<string, never>>(
+      fetch(`/api/queues/${id}/next-image?reviewer=${encodeURIComponent(reviewer)}${after ? `&after=${after}` : ""}`),
+    ),
+  queueImage: (id: number, imageId: string) => j<ImageReview>(fetch(`/api/queues/${id}/image/${imageId}`)),
+  reviewImage: (id: number, reviewer: string, items: { id: number; action: string; label?: Pred | null }[]) =>
+    j<Item[]>(post(`/api/queues/${id}/review-image`, { reviewer, items })),
   queueItems: (id: number, status?: string) =>
     j<Item[]>(fetch(`/api/queues/${id}/items${status ? `?status=${status}` : ""}`)),
   next: (id: number, reviewer: string, after?: number) =>
@@ -164,6 +176,22 @@ export const api = {
   export: (name: string, queue_ids?: number[], incoming = false) =>
     j<Record<string, unknown>>(post("/api/export", { name, queue_ids, incoming })),
 };
+
+export interface ImageSummary {
+  image_id: string;
+  n: number;
+  pending: number;
+  auto: number;
+  reviewed: number;
+  fix: number;
+  spot: number;
+  first_id: number;
+}
+
+export interface ImageReview {
+  image: ImageRow;
+  items: Item[];
+}
 
 export interface HeldoutPair {
   row: Record<string, unknown> & { skill: Skill; object?: string; question?: string; boxes?: number[][]; points?: number[][]; answer?: string };

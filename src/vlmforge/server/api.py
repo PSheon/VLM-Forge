@@ -61,6 +61,25 @@ class QueueIn(BaseModel):
     judge: bool = True
 
 
+class AutoQueueIn(BaseModel):
+    """Autogen (GOALS §6): the tool picks ``n_images`` from ``sources``, the teacher writes the
+    questions, the student answers, agreement + judge decide, humans check per image."""
+
+    name: str
+    sources: list[str]
+    n_images: int = 50
+    skills: list[str] = ["detect", "point", "query", "caption"]
+    model: str = "base"
+    focus: str = ""
+    topics: list[str] = []
+    seed: int = 0
+
+
+class ImageReviewIn(BaseModel):
+    reviewer: str
+    items: list[dict]  # {"id", "action": approve|correct|discard, "label"?}
+
+
 class JudgeIn(BaseModel):
     image_id: str
     skill: str
@@ -77,6 +96,8 @@ class ReviewIn(BaseModel):
 class ScanIn(BaseModel):
     dir: str
     source: str
+    limit: int | None = None
+    seed: int = 0
 
 
 class ExportIn(BaseModel):
@@ -192,15 +213,19 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
 
     @app.post("/api/images/scan")
     def scan(body: ScanIn):
+        """Register images under a directory; ``limit`` takes a seeded random sample so a
+        Data Core release with 800k files can feed the autogen pool without indexing it all."""
+        import random
+
         d = Path(body.dir)
         if not d.is_dir():
             raise HTTPException(404, f"{d} is not a directory")
-        added = [
-            ws.add_image_path(p, body.source)["id"]
-            for p in sorted(d.rglob("*"))
-            if p.suffix.lower() in IMAGE_EXT
-        ]
-        return {"added": len(added), "image_ids": added}
+        files = [p for p in d.rglob("*") if p.suffix.lower() in IMAGE_EXT]
+        files.sort()
+        if body.limit and len(files) > body.limit:
+            files = random.Random(body.seed).sample(files, body.limit)
+        added = [ws.add_image_path(p, body.source)["id"] for p in files]
+        return {"added": len(added), "found": len(files), "image_ids": added}
 
     @app.get("/api/images")
     def images(source: str | None = None, limit: int = 500):
@@ -370,6 +395,118 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                 ws.add_item(image_id, body.skill, prompt, None, None, q["id"])
         _start(q["id"], _predict_queue, body.model, body.judge)
         return {**ws.queue(q["id"]), "job": jobs[q["id"]]}
+
+    def _autogen_queue(qid: int, cfg: dict):
+        """generating (teacher) -> predicting (student) -> judging (agreement; judge for
+        captions) -> triage by image."""
+        from ..autogen import agree, items_from_teacher
+
+        job = jobs[qid]
+        try:
+            skills = set(cfg["skills"])
+            images = cfg["image_ids"]
+            job["phase"], job["total"], job["done"] = "generating", len(images), 0
+            for image_id in images:
+                im = ws.image(image_id)
+                t = engine.teacher_generate(im["path"], cfg.get("focus", ""), cfg.get("topics"))
+                for it in items_from_teacher(t, skills):
+                    ws.add_item(
+                        image_id, it["skill"], it["prompt"], None, None, qid, "auto", it["teacher"]
+                    )
+                job["done"] += 1
+            # student
+            items = ws.items(qid, "pending")
+            by_prompt: dict[tuple[str, str], list[dict]] = {}
+            for it in items:
+                by_prompt.setdefault((it["skill"], it["prompt"]), []).append(it)
+            job["phase"], job["total"], job["done"] = "predicting", len(items), 0
+            for (skill, prompt), its in by_prompt.items():
+                for i in range(0, len(its), 32):
+                    chunk = its[i : i + 32]
+                    preds = engine.infer([c["path"] for c in chunk], skill, prompt, cfg["model"])
+                    for c, p in zip(chunk, preds, strict=True):
+                        ws.set_pred(c["id"], p, cfg["model"])
+                    job["done"] += len(chunk)
+            # agreement, and the judge for the teacher's captions
+            items = ws.items(qid, "pending")
+            caps = [it for it in items if it["skill"] == "caption"]
+            job["phase"], job["total"], job["done"] = "judging", len(items), 0
+            for it in items:
+                if it["skill"] != "caption":
+                    ws.set_judge(it["id"], agree(it["skill"], it["pred"], it["teacher"]))
+                    job["done"] += 1
+            for i in range(0, len(caps), 8):
+                chunk = caps[i : i + 8]
+                asks = [{**c, "pred": c["teacher"]} for c in chunk]  # judge the teacher caption
+                for c, v in zip(chunk, engine.judge_items(asks), strict=True):
+                    ws.set_judge(c["id"], v)
+                job["done"] += len(chunk)
+            job["triage"] = ws.triage_images(qid, cfg.get("seed", 0))
+            job["state"] = "done"
+        except Exception as e:  # noqa: BLE001 - shown in the UI
+            job["state"] = "error"
+            job["error"] = f"{type(e).__name__}: {e}"
+
+    @app.post("/api/queues/auto")
+    def create_auto_queue(body: AutoQueueIn):
+        import random
+
+        bad = [s for s in body.skills if s not in SKILLS]
+        if bad or not body.skills:
+            raise HTTPException(422, f"bad skills {bad}")
+        pool: list[str] = []
+        for s in body.sources:
+            if s == "heldout" or s.startswith("heldout"):
+                raise HTTPException(422, "held-out images never become training data (GOALS §4)")
+            pool += [im["id"] for im in ws.images(s, 100000)]
+        pool = sorted(set(pool))
+        if not pool:
+            raise HTTPException(422, "no images in those sources")
+        rng = random.Random(body.seed)
+        rng.shuffle(pool)
+        chosen = pool[: body.n_images]
+        judge = Path(paths.JUDGE_MODEL).name
+        try:
+            q = ws.create_queue(body.name, "query", body.model, "autogen", judge)
+        except Exception as e:  # noqa: BLE001 - duplicate name
+            raise HTTPException(409, f"queue exists? {e}") from e
+        cfg = {**body.model_dump(), "image_ids": chosen}
+        ws.set_queue_mode(q["id"], "auto", cfg)
+        _start(q["id"], _autogen_queue, cfg)
+        return {**ws.queue(q["id"]), "job": jobs[q["id"]]}
+
+    @app.get("/api/queues/{qid}/images")
+    def queue_images(qid: int):
+        return ws.image_summary(qid)
+
+    @app.get("/api/queues/{qid}/next-image")
+    def queue_next_image(qid: int, reviewer: str, after: str | None = None):
+        r = ws.claim_next_image(qid, reviewer, after)
+        if r is None:
+            return {}
+        image, items = r
+        return {"image": image, "items": items}
+
+    @app.get("/api/queues/{qid}/image/{image_id}")
+    def queue_image(qid: int, image_id: str):
+        im = ws.image(image_id)
+        if im is None:
+            raise HTTPException(404)
+        return {"image": im, "items": [it for it in ws.items(qid) if it["image_id"] == image_id]}
+
+    @app.post("/api/queues/{qid}/review-image")
+    def review_image(qid: int, body: ImageReviewIn):
+        out = []
+        for d in body.items:
+            try:
+                out.append(
+                    ws.review(
+                        int(d["id"]), d.get("action", "approve"), body.reviewer, d.get("label")
+                    )
+                )
+            except (KeyError, ValueError) as e:
+                raise HTTPException(422, f"item {d.get('id')}: {e}") from e
+        return out
 
     @app.get("/api/queues")
     def queues():

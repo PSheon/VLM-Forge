@@ -29,6 +29,14 @@ class StubEngine:
             return [{"points": [[0.5, 0.5]]} for _ in images]
         return [{"text": f"{model}: 2"} for _ in images]
 
+    def teacher_generate(self, path, focus="", topics=None):
+        return {
+            "objects": [{"name": "person", "boxes": [[0.25, 0.25, 0.75, 0.75]]}],
+            "questions": [{"q": "How many people are there?", "a": "2"}],
+            "caption": "A person in a room.",
+            "model": "stub",
+        }
+
     def judge_items(self, items):
         # "shelf" items are flagged, everything else accepted
         return [
@@ -173,6 +181,74 @@ def test_judge_triage(client, monkeypatch):
         json={"image_id": ids[0], "skill": "detect", "prompt": "shelf", "pred": {"boxes": []}},
     ).json()
     assert v["verdict"] == "fix"
+
+
+def wait_done(client, qid):
+    for _ in range(200):
+        q = client.get(f"/api/queues/{qid}").json()
+        if q["job"]["state"] in ("done", "error"):
+            return q
+        time.sleep(0.02)
+    raise AssertionError("job did not finish")
+
+
+def test_autogen_queue_per_image_review(client, monkeypatch):
+    from vlmforge.server import workspace as wsmod
+
+    monkeypatch.setattr(wsmod, "SPOT_MIN", 0)
+    for c in ("red", "green", "blue"):
+        client.post("/api/images", files={"file": (f"{c}.png", png_bytes(c), "image/png")})
+    r = client.post(
+        "/api/queues/auto",
+        json={"name": "auto-1", "sources": ["upload"], "n_images": 2},
+    )
+    assert r.status_code == 200, r.text
+    q = wait_done(client, r.json()["id"])
+    assert q["job"]["state"] == "done", q["job"]
+    # per image: detect person (agree), point person (agree), query ("base: 2" vs "2" ->
+    # agree), caption (judge stub accepts) -> both images clean; no spot -> all auto
+    assert q["total"] == 8 and q["counts"]["auto"] == 8 and q["job"]["triage"]["clean"] == 2
+    rows = client.ws.reviewed_rows([q["id"]])
+    assert len(rows) == 8 and {r["label_origin"] for r in rows} == {"machine_reviewed"}
+    assert next(r for r in rows if r["skill"] == "query")["answer"] == "2"  # teacher text
+    assert next(r for r in rows if r["skill"] == "caption")["answer"] == "A person in a room."
+    # held-out can never be an autogen source
+    bad = client.post("/api/queues/auto", json={"name": "x", "sources": ["heldout"], "n_images": 1})
+    assert bad.status_code == 422
+
+
+def test_autogen_disagreement_goes_to_human_per_image(client):
+    client.eng.infer = lambda images, skill, prompt, model="base": [
+        {"boxes": []}
+        if skill == "detect"
+        else {"points": []}
+        if skill == "point"
+        else {"text": "5"}
+        for _ in images
+    ]
+    client.post("/api/images", files={"file": ("a.png", png_bytes("red"), "image/png")})
+    r = client.post(
+        "/api/queues/auto", json={"name": "auto-2", "sources": ["upload"], "n_images": 1}
+    )
+    q = wait_done(client, r.json()["id"])
+    assert q["counts"]["pending"] == 4 and q["verdicts"]["fix"] == 3  # caption: stub accepts
+    imgs = client.get(f"/api/queues/{q['id']}/images").json()
+    assert len(imgs) == 1 and imgs[0]["fix"] == 3
+    nx = client.get(f"/api/queues/{q['id']}/next-image", params={"reviewer": "P"}).json()
+    assert len(nx["items"]) == 4 and nx["items"][0]["teacher"]["boxes"]
+    decisions = [
+        {
+            "id": it["id"],
+            "action": "correct",
+            "label": it["teacher"] if it["skill"] != "caption" else {"text": "ok"},
+        }
+        for it in nx["items"]
+    ]
+    out = client.post(
+        f"/api/queues/{q['id']}/review-image", json={"reviewer": "P", "items": decisions}
+    ).json()
+    assert {o["status"] for o in out} == {"corrected"}
+    assert client.get(f"/api/queues/{q['id']}/next-image", params={"reviewer": "P"}).json() == {}
 
 
 def test_compare_and_status(client):

@@ -38,6 +38,9 @@ MIGRATIONS = (
     ("items", "verdict", "text"),
     ("items", "spot", "integer not null default 0"),
     ("queues", "judge", "text not null default ''"),
+    ("items", "teacher", "text"),  # autogen: the teacher's answer (json)
+    ("queues", "mode", "text not null default 'manual'"),  # manual | auto
+    ("queues", "config", "text"),  # autogen config (json)
 )
 
 SCHEMA = """
@@ -213,11 +216,12 @@ class Workspace:
         pred_model: str | None,
         queue_id: int | None = None,
         origin: str = "queue",
+        teacher: dict | None = None,
     ) -> int:
         with self.lock:
             cur = self.db.execute(
-                "insert into items (queue_id, image_id, skill, prompt, pred, pred_model, origin)"
-                " values (?, ?, ?, ?, ?, ?, ?)",
+                "insert into items (queue_id, image_id, skill, prompt, pred, pred_model, origin,"
+                " teacher) values (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     queue_id,
                     image_id,
@@ -226,10 +230,27 @@ class Workspace:
                     json.dumps(pred) if pred is not None else None,
                     pred_model,
                     origin,
+                    json.dumps(teacher, ensure_ascii=False) if teacher is not None else None,
                 ),
             )
             self.db.commit()
             return int(cur.lastrowid)
+
+    def set_queue_mode(self, queue_id: int, mode: str, config: dict) -> None:
+        with self.lock:
+            self.db.execute(
+                "update queues set mode = ?, config = ? where id = ?",
+                (mode, json.dumps(config, ensure_ascii=False), queue_id),
+            )
+            self.db.commit()
+
+    def set_label(self, item_id: int, label: dict | None) -> None:
+        with self.lock:
+            self.db.execute(
+                "update items set label = ? where id = ?",
+                (json.dumps(label, ensure_ascii=False) if label is not None else None, item_id),
+            )
+            self.db.commit()
 
     def set_pred(self, item_id: int, pred: dict | None, pred_model: str | None) -> None:
         with self.lock:
@@ -289,6 +310,7 @@ class Workspace:
         it["pred"] = json.loads(it["pred"]) if it["pred"] else None
         it["label"] = json.loads(it["label"]) if it["label"] else None
         it["judge"] = json.loads(it["judge"]) if it.get("judge") else None
+        it["teacher"] = json.loads(it["teacher"]) if it.get("teacher") else None
         return it
 
     def items(self, queue_id: int, status: str | None = None, limit: int = 2000) -> list[dict]:
@@ -302,6 +324,89 @@ class Workspace:
             args.append(status)
         q += " order by items.id limit ?"
         return [self._item(r) for r in self.db.execute(q, [*args, limit])]
+
+    # ------------------------------------------------------------------ per-image review
+    def image_summary(self, queue_id: int) -> list[dict]:
+        """One row per image of a queue: counts by status / verdict, for the image grid."""
+        rows = self.db.execute(
+            "select image_id, count(*) n,"
+            " sum(status = 'pending') pending, sum(status = 'auto') auto,"
+            " sum(status in ('approved', 'corrected', 'discarded')) reviewed,"
+            " sum(verdict = 'fix' and status = 'pending') fix, max(spot) spot,"
+            " min(items.id) first_id"
+            " from items where queue_id = ? group by image_id order by first_id",
+            (queue_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def triage_images(self, queue_id: int, seed: int = 0) -> dict:
+        """Autogen triage by image: an image whose pending items were all accepted leaves the
+        human queue (items -> ``auto`` with their auto label) except a spot sample of images;
+        an image with any ``fix`` item stays pending as a whole."""
+        from ..autogen import auto_label
+
+        by_img: dict[str, list[dict]] = {}
+        for it in self.items(queue_id, "pending"):
+            by_img.setdefault(it["image_id"], []).append(it)
+        clean = [img for img, its in by_img.items() if all(i["verdict"] == "accept" for i in its)]
+        rng = random.Random(seed)
+        rng.shuffle(clean)
+        k = min(len(clean), max(SPOT_MIN, round(SPOT_FRAC * len(clean))))
+        spot, auto = set(clean[:k]), set(clean[k:])
+        n_auto = 0
+        with self.lock:
+            for img, its in by_img.items():
+                for it in its:
+                    if it["teacher"] is not None and it["verdict"] == "accept":
+                        lab = auto_label(it["skill"], it["pred"], it["teacher"])
+                        self.db.execute(
+                            "update items set label = ? where id = ?",
+                            (json.dumps(lab, ensure_ascii=False), it["id"]),
+                        )
+                    if img in spot:
+                        self.db.execute("update items set spot = 1 where id = ?", (it["id"],))
+                    elif img in auto:
+                        self.db.execute(
+                            "update items set status = 'auto' where id = ?", (it["id"],)
+                        )
+                        n_auto += 1
+            self.db.commit()
+        return {"images": len(by_img), "clean": len(clean), "spot": len(spot), "auto": n_auto}
+
+    def claim_next_image(self, queue_id: int, reviewer: str, after_image: str | None = None):
+        """The next image with pending items (images holding a ``fix`` first); every pending
+        item of it is claimed for the reviewer. Returns (image, items) or None."""
+        with self.lock:
+            cutoff = time.time() - CLAIM_MINUTES * 60
+            rows = self.db.execute(
+                "select image_id, max(verdict = 'fix') fix, min(id) first_id,"
+                " max(claimed_by is not null and claimed_by != ? and claimed_at >= ?) taken"
+                " from items where queue_id = ? and status = 'pending' group by image_id"
+                " order by fix desc, first_id",
+                (reviewer, cutoff, queue_id),
+            ).fetchall()
+            pick = None
+            seen_after = after_image is None
+            for r in rows:
+                if r["taken"]:
+                    continue
+                if not seen_after:
+                    seen_after = r["image_id"] == after_image
+                    continue
+                pick = r["image_id"]
+                break
+            if pick is None and after_image is not None:  # wrap around
+                pick = next((r["image_id"] for r in rows if not r["taken"]), None)
+            if pick is None:
+                return None
+            self.db.execute(
+                "update items set claimed_by = ?, claimed_at = ?"
+                " where queue_id = ? and image_id = ? and status = 'pending'",
+                (reviewer, time.time(), queue_id, pick),
+            )
+            self.db.commit()
+        items = [it for it in self.items(queue_id) if it["image_id"] == pick]
+        return self.image(pick), items
 
     def claim_next(self, queue_id: int, reviewer: str, after: int | None = None) -> dict | None:
         """The next pending item nobody else holds (claims expire after CLAIM_MINUTES): the
@@ -408,7 +513,7 @@ def item_row(it: dict) -> dict:
         "changed": it["status"] == "corrected",
         "judge": it.get("verdict"),
     }
-    lab = (it["pred"] if auto else it["label"]) or {}
+    lab = it["label"] or (it["pred"] if auto else None) or {}
     if it["skill"] == "detect":
         return {**base, "object": it["prompt"], "boxes": lab.get("boxes", [])}
     if it["skill"] == "point":
