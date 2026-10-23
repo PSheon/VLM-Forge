@@ -177,10 +177,46 @@ class Judge:
         new = out[0, inputs["input_ids"].shape[1] :]
         return self.proc.decode(new, skip_special_tokens=True)
 
+    def ask_batch(self, pairs: list[tuple[Image.Image, str]]) -> list[str]:
+        """Several (image, prompt) pairs in one generate (left padding); the teacher's
+        throughput, not its latency, is what a 300-image batch needs."""
+        import torch
+
+        if not pairs:
+            return []
+        msgs = [
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": im}, {"type": "text", "text": text}],
+                }
+            ]
+            for im, text in pairs
+        ]
+        self.proc.tokenizer.padding_side = "left"
+        inputs = self.proc.apply_chat_template(
+            msgs,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            padding=True,
+        ).to(self.device)
+        with torch.no_grad():
+            out = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False)
+        n = inputs["input_ids"].shape[1]
+        return [self.proc.decode(row[n:], skip_special_tokens=True) for row in out]
+
     def generate(self, image_path: str, focus: str = "", topics: list[str] | None = None) -> dict:
-        """Teacher mode (``vlmforge.autogen``): one call for object names + counts, questions
-        and caption, then one short grounding call per object type (long box lists made the
-        32B model loop). Types with more than MAX_INSTANCES instances are not boxed."""
+        return self.generate_batch([image_path], focus, topics)[0]
+
+    def generate_batch(
+        self, image_paths: list[str], focus: str = "", topics: list[str] | None = None
+    ) -> list[dict]:
+        """Teacher mode (``vlmforge.autogen``) for several images: one batched call for object
+        names + counts, questions and caption, then the grounding prompts of every image
+        batched together (long box lists made the 32B model loop, so one short call per
+        object type). Types with more than MAX_INSTANCES instances are not boxed."""
         from .autogen import (
             MAX_INSTANCES,
             ground_prompt,
@@ -189,18 +225,28 @@ class Judge:
             teacher_prompt,
         )
 
-        image = render(Image.open(image_path), {})
-        raw_text = self.ask(image, teacher_prompt(focus, topics))
-        t = parse_teacher(raw_text)
-        for o in t["objects"]:
-            if o["count"] > MAX_INSTANCES:
-                o["skipped"] = True
-                continue
-            if o["count"] > 0 and not o["boxes"]:
-                o["boxes"] = parse_boxes(self.ask(image, ground_prompt(o["name"], o["count"])))
-        t["raw"] = raw_text[:2000]
-        t["model"] = Path(self.model_dir).resolve().name
-        return t
+        images = [render(Image.open(p), {}) for p in image_paths]
+        raws = self.ask_batch([(im, teacher_prompt(focus, topics)) for im in images])
+        out = []
+        asks: list[tuple[int, dict]] = []
+        for i, raw_text in enumerate(raws):
+            t = parse_teacher(raw_text)
+            for o in t["objects"]:
+                if o["count"] > MAX_INSTANCES:
+                    o["skipped"] = True
+                elif o["count"] > 0 and not o["boxes"]:
+                    asks.append((i, o))
+            t["raw"] = raw_text[:2000]
+            t["model"] = Path(self.model_dir).resolve().name
+            out.append(t)
+        for k in range(0, len(asks), 8):
+            chunk = asks[k : k + 8]
+            answers = self.ask_batch(
+                [(images[i], ground_prompt(o["name"], o["count"])) for i, o in chunk]
+            )
+            for (_, o), a in zip(chunk, answers, strict=True):
+                o["boxes"] = parse_boxes(a)
+        return out
 
     def judge(self, image_path: str, skill: str, prompt: str, pred: dict) -> dict:
         image = Image.open(image_path)

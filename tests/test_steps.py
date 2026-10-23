@@ -34,6 +34,9 @@ class StubEngine:
             "model": "stub",
         }
 
+    def teacher_generate_batch(self, paths, focus="", topics=None):
+        return [self.teacher_generate(p, focus, topics) for p in paths]
+
     def judge_items(self, items):
         return [{"verdict": "accept", "note": "stub", "model": "stub"} for _ in items]
 

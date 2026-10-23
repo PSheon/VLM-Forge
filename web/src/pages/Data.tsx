@@ -9,7 +9,7 @@ export default function Data({ sum, refresh, status, go }: { sum: Summary | null
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const [adv, setAdv] = useState(false);
-  const [n, setN] = useState<number | "">("");
+  const [n, setN] = useState<number | "">(20);
   const [skills, setSkills] = useState<Skill[]>(["detect", "point", "query", "caption"]);
   const [topics, setTopics] = useState("");
   const [focus, setFocus] = useState("");
@@ -45,10 +45,10 @@ export default function Data({ sum, refresh, status, go }: { sum: Summary | null
             <button className="primary" disabled={busy || !!running || !(status?.engine.judge_ok ?? true)} onClick={() => run(s.source)} title="模型出題、作答、比對；完成後到 ② 檢查">自動出題（{n === "" ? s.n : Math.min(Number(n), s.n)} 張）</button>
           </div>
         ))}
-        <button onClick={() => setAdv(!adv)} style={{ alignSelf: "flex-start" }}>{adv ? "收起進階" : "進階…"}</button>
+        <div className="row"><button onClick={() => setAdv(!adv)}>{adv ? "收起進階" : "進階…"}</button><span className="muted hint">一次抽 {n === "" ? "全部" : n} 張；出題模型約 15–60 秒/張，可以先跑 20 張檢查看看，再加。</span></div>
         {adv && (
           <div className="col card">
-            <label className="f">只抽幾張（空＝全部）<input type="number" min={1} value={n} onChange={(e) => setN(e.target.value === "" ? "" : +e.target.value)} /></label>
+            <label className="f">一次抽幾張（空＝全部）<input type="number" min={1} value={n} onChange={(e) => setN(e.target.value === "" ? "" : +e.target.value)} /></label>
             <div className="f"><span>出哪些題</span><div className="row">{(["detect", "point", "query", "caption"] as Skill[]).map((s) => <label key={s} className="row hint"><input type="checkbox" checked={skills.includes(s)} onChange={(e) => setSkills(e.target.checked ? [...skills, s] : skills.filter((x) => x !== s))} />{s}</label>)}</div></div>
             <label className="f">額外巡檢主題（每行一個；預設已含值班人員、安全帽／背心／口罩／手套、出口阻擋、門、地面、堆高機、燈、管制區、無人看管物品）<textarea value={topics} onChange={(e) => setTopics(e.target.value)} style={{ minHeight: 44 }} /></label>
             <label className="f">側重（給出題模型的一句話）<input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="例如 night-shift factory floor" /></label>
@@ -71,12 +71,14 @@ export default function Data({ sum, refresh, status, go }: { sum: Summary | null
 
 function BatchRow({ b }: { b: Batch }) {
   const j = b.job;
+  const eta = j?.state === "running" && j.started && j.done > 0 ? Math.round(((Date.now() / 1000 - j.started) / j.done) * (j.total - j.done) / 60) : null;
+  const cancel = () => fetch(`/api/queues/${b.id}/cancel`, { method: "POST" });
   const pending = b.counts.pending ?? 0, auto = b.counts.auto ?? 0, done = (b.counts.approved ?? 0) + (b.counts.corrected ?? 0) + (b.counts.discarded ?? 0);
   return (
     <div style={{ borderTop: "1px solid var(--line)", paddingTop: 6 }}>
       <div className="row" style={{ justifyContent: "space-between" }}>
         <span><strong>{b.name}</strong> <span className="muted">{b.total} 題</span></span>
-        <span className="muted hint">{j?.state === "running" ? `${phaseLabel(j.phase)} ${j.done}/${j.total}` : j?.state === "error" ? <span className="bad">失敗：{j.error}</span> : `待看 ${pending} · 自動通過 ${auto} · 已看 ${done}`}</span>
+        <span className="muted hint">{j?.state === "running" ? <>{phaseLabel(j.phase)} {j.done}/{j.total}{eta !== null ? `（約還要 ${eta} 分鐘）` : j.phase === "generating" ? "（載入出題模型中…）" : ""} <button onClick={cancel} style={{ padding: "0 6px" }}>取消</button></> : j?.state === "error" ? <span className="bad">失敗：{j.error}</span> : j?.state === "cancelled" ? <span className="warn">已取消 · 待看 {pending} · 自動通過 {auto}</span> : `待看 ${pending} · 自動通過 ${auto} · 已看 ${done}`}</span>
       </div>
       {j?.state === "running" && <div className="bar"><i style={{ width: `${j.total ? (100 * j.done) / j.total : 0}%` }} /></div>}
       {j?.student_error && <div className="warn hint">模型沒作答（{j.student_error}）；這批全部交給你看。</div>}

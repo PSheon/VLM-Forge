@@ -65,7 +65,10 @@ class Engine:
 
     def teacher_generate(self, image_path: str, focus: str = "", topics=None) -> dict:
         """Questions, answers and boxes for one image from the judge model (autogen)."""
-        return self.submit(lambda j: j.generate(image_path, focus, topics), "judge").result()
+        return self.teacher_generate_batch([image_path], focus, topics)[0]
+
+    def teacher_generate_batch(self, image_paths: list[str], focus: str = "", topics=None):
+        return self.submit(lambda j: j.generate_batch(image_paths, focus, topics), "judge").result()
 
     def judge_items(self, items: list[dict]) -> list[dict]:
         """Verdicts for ``items`` (``path``, ``skill``, ``prompt``, ``pred``), on the worker."""

@@ -46,6 +46,7 @@ export interface Item {
 
 export interface Job {
   state: string;
+  started?: number;
   phase?: string;
   done: number;
   total: number;

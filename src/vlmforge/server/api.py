@@ -24,6 +24,7 @@ from .pipeline import DEFAULT_LR, DEFAULT_STEPS, Pipeline, default_name
 from .workspace import SKILLS, Workspace
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+GEN_BATCH = 8  # images per teacher call (GPU throughput; the 32B judge is the slow part)
 
 
 class InferIn(BaseModel):
@@ -379,6 +380,15 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         jobs[qid] = {"state": "running", "phase": "", "done": 0, "total": 0, "error": None}
         threading.Thread(target=target, args=(qid, *args), daemon=True).start()
 
+    @app.post("/api/queues/{qid}/cancel")
+    def cancel_queue(qid: int):
+        """Stop a running batch after the current chunk; what was generated stays."""
+        job = jobs.get(qid)
+        if not job or job["state"] != "running":
+            raise HTTPException(409, "not running")
+        job["cancel"] = True
+        return job
+
     @app.post("/api/queues/{qid}/judge")
     def judge_queue(qid: int):
         """(Re)run the judge on this queue's unjudged pending items."""
@@ -428,14 +438,30 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             skills = set(cfg["skills"])
             images = cfg["image_ids"]
             job["phase"], job["total"], job["done"] = "generating", len(images), 0
-            for image_id in images:
-                im = ws.image(image_id)
-                t = engine.teacher_generate(im["path"], cfg.get("focus", ""), cfg.get("topics"))
-                for it in items_from_teacher(t, skills):
-                    ws.add_item(
-                        image_id, it["skill"], it["prompt"], None, None, qid, "auto", it["teacher"]
-                    )
-                job["done"] += 1
+            job["started"] = time.time()
+            for k in range(0, len(images), GEN_BATCH):
+                if job.get("cancel"):
+                    job["state"] = "cancelled"
+                    return
+                chunk = images[k : k + GEN_BATCH]
+                paths_ = [ws.image(i)["path"] for i in chunk]
+                ts = engine.teacher_generate_batch(paths_, cfg.get("focus", ""), cfg.get("topics"))
+                for image_id, t in zip(chunk, ts, strict=True):
+                    for it in items_from_teacher(t, skills):
+                        ws.add_item(
+                            image_id,
+                            it["skill"],
+                            it["prompt"],
+                            None,
+                            None,
+                            qid,
+                            "auto",
+                            it["teacher"],
+                        )
+                job["done"] += len(chunk)
+            if job.get("cancel"):
+                job["state"] = "cancelled"
+                return
             # student
             items = ws.items(qid, "pending")
             by_prompt: dict[tuple[str, str], list[dict]] = {}
