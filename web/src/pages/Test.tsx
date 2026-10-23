@@ -7,7 +7,7 @@ import { api, defaultPrompt, emptyLabel, fmt, fmtDelta, phaseLabel, skillLabel, 
 import Canvas, { type View } from "../components/Canvas";
 import ImagePicker from "../components/ImagePicker";
 import TextDiff from "../components/TextDiff";
-import { ActionsHead, PageHead, Pill, Section, useEscBack, useToast } from "../components/ui";
+import { ActionsHead, PageHead, Pill, Section, Skeleton, useEscBack, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
 import type { Step } from "../App";
 
@@ -32,7 +32,7 @@ export default function Test({ models, reviewer, go }: { models: Model[]; review
       {view === "scores" && data && <Scores header={head("測試", "base＝原本的 Moondream；每個訓練好的模型都和它比")} data={data} done={done} running={running} suites={suites} go={go} onDiff={(run, suite) => { setDiff({ run, suite }); setView("diff"); }} onPlay={() => setView("play")} />}
       {view === "diff" && <Diff header={head("看差異", "逐題比 base 和新模型")} runs={done} suites={suites} initial={diff} />}
       {view === "play" && <Play header={head("試一張", "任何一張圖，問 base 和新模型")} models={models} reviewer={reviewer} />}
-      {view === "scores" && !data && <div className="page"><div className="col">{head("測試", "")}<div className="empty"><i className="spin" />載入中…</div></div><div className="actions"><ActionsHead /></div></div>}
+      {view === "scores" && !data && <div className="page"><div className="col">{head("測試", "")}<Skeleton h={170} r={10} /><div className="suites"><Skeleton h={130} r={10} /><Skeleton h={130} r={10} /></div></div><div className="actions"><ActionsHead /><Skeleton h={44} r={8} /></div></div>}
     </Fade>
   );
 }
@@ -42,37 +42,41 @@ const suiteKind = (s: string): ["target" | "val" | "ref", string] => (s === "hel
 function Scores({ header, data, done, running, suites, go, onDiff, onPlay }: { header: ReactNode; data: { base: Record<string, Record<string, number>> }; done: Run[]; running?: Run; suites: string[]; go: (s: Step) => void; onDiff: (run: string, suite: string) => void; onPlay: () => void }) {
   const best = done[0];
   const [orin, setOrin] = useState(false);
+  const suiteCard = (s: string) => {
+            const [kind, why] = suiteKind(s);
+            const skills = SKILLS.filter((k) => data.base[s]?.[k] !== undefined || done.some((r) => r.evals[s]?.[k] !== undefined));
+            if (!skills.length) return null;
+            return (
+              <div key={s} className={`panel col suite ${kind}`}>
+                <div className="row"><h3>{suiteLabel(s)}</h3><Pill kind={kind === "target" ? "warn" : "grey"}>{why}</Pill></div>
+                <div className="tw"><table className="score">
+                  <thead><tr><th>skill</th><th className="num">base</th>{done.map((r) => <th key={r.name} className="num"><div className="col" style={{ gap: 2, alignItems: "flex-end" }}><span>{r.name}</span><span className="row" style={{ gap: 6 }}>{r.gate && kind === "target" && <Pill kind={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "過關" : "沒過"}</Pill>}<button className="ghost small" onClick={() => onDiff(r.name, s)} title="逐題看 base 和這個模型在這張考卷的差別">看差異 →</button></span></div></th>)}</tr></thead>
+                  <tbody>
+                    {skills.map((k) => (
+                      <tr key={k}>
+                        <td>{skillLabel[k]}</td>
+                        <td className="num">{fmt(data.base[s]?.[k])}</td>
+                        {done.map((r) => { const v = r.evals[s]?.[k]; const b = data.base[s]?.[k]; const d = v !== undefined && b !== undefined ? v - b : undefined; return (
+                          <td key={r.name} className="num">
+                            {v === undefined ? <span className="muted">—</span> : <span className="row" style={{ justifyContent: "flex-end", gap: 6 }}><span>{fmt(v)}</span>{d !== undefined && <Pill kind={d > 0.0005 ? "ok" : d < -0.0005 ? "bad" : "grey"}>{fmtDelta(d)}</Pill>}</span>}
+                          </td>
+                        ); })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table></div>
+              </div>
+            );
+          };
+
   return (
     <div className="page">
     <div className="col">
       {header}
-      <div className="suites">
-        {suites.map((s) => {
-          const [kind, why] = suiteKind(s);
-          const skills = SKILLS.filter((k) => data.base[s]?.[k] !== undefined || done.some((r) => r.evals[s]?.[k] !== undefined));
-          if (!skills.length) return null;
-          return (
-            <div key={s} className={`panel col suite ${kind}`}>
-              <div className="row"><h3>{suiteLabel(s)}</h3><Pill kind={kind === "target" ? "warn" : "grey"}>{why}</Pill></div>
-              <div className="tw"><table className="score">
-                <thead><tr><th>skill</th><th className="num">base</th>{done.map((r) => <th key={r.name} className="num"><div className="col" style={{ gap: 2, alignItems: "flex-end" }}><span>{r.name}</span>{r.gate && kind === "target" && <Pill kind={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "過關" : "沒過"}</Pill>}</div></th>)}</tr></thead>
-                <tbody>
-                  {skills.map((k) => (
-                    <tr key={k}>
-                      <td>{skillLabel[k]}</td>
-                      <td className="num">{fmt(data.base[s]?.[k])}</td>
-                      {done.map((r) => { const v = r.evals[s]?.[k]; const b = data.base[s]?.[k]; const d = v !== undefined && b !== undefined ? v - b : undefined; return (
-                        <td key={r.name} className="num">
-                          {v === undefined ? <span className="muted">—</span> : <span className="row" style={{ justifyContent: "flex-end", gap: 6 }}><span>{fmt(v)}</span>{d !== undefined && <Pill kind={d > 0.0005 ? "ok" : d < -0.0005 ? "bad" : "grey"}>{fmtDelta(d)}</Pill>}<button className="ghost small" onClick={() => onDiff(r.name, s)} title="逐題看 base 和這個模型的差別">看差異</button></span>}
-                        </td>
-                      ); })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table></div>
-            </div>
-          );
-        })}
+      <div className="col">
+        {suites.filter((x) => suiteKind(x)[0] === "target").map(suiteCard)}
+        {suites.some((x) => suiteKind(x)[0] !== "target") && <div className="small muted">驗證集與參考考卷</div>}
+        <div className="suites">{suites.filter((x) => suiteKind(x)[0] !== "target").map(suiteCard)}</div>
       </div>
       <div className="muted hint">分數 0–1，越高越好：Detect／Point＝找對的比例（F1），Query／Caption＝答對的比例；綠紅小字＝比 base 高／低幾個百分點。考卷的圖從不進訓練。v1 目標：工廠 CCTV 的 Detect 和 Query 都不低於 base。</div>
     </div>
@@ -81,7 +85,7 @@ function Scores({ header, data, done, running, suites, go, onDiff, onPlay }: { h
       {best ? <button className="primary big" onClick={() => onDiff(best.name, "heldout-cctv")}>看 {best.name} 的差異 →</button> : <button className="primary big" onClick={() => go("train")} disabled={!!running}>{running ? `${running.name} 訓練中…` : "去訓練 →"}</button>}
       <Pop show={!done.length} className="hint muted">{running ? `第 ${running.last?.step ?? 0}/${running.steps} 步；訓完自動在每張考卷評分，這裡會多一欄。` : "左邊是 base 的起點分數；訓一個模型後會多一欄。"}</Pop>
       {best?.gate && <div className={`hint ${best.gate.passed ? "ok" : "bad"}`}>{best.name}：{best.gate.passed ? "比 base 好（工廠 CCTV）" : "沒有比 base 好（工廠 CCTV）"}</div>}
-      <div className="row hint"><button className="ghost" onClick={onPlay}>試一張圖 →</button>{best && <button className="ghost" onClick={() => onDiff(best.name, "heldout-cctv")}>看差異 →</button>}</div>
+      <div className="row hint"><button className="ghost" onClick={onPlay}>試一張圖 →</button></div>
       {done.length > 0 && <Section title="匯出到 Orin" summary={`${done.length} 個模型可匯出`} open={orin} onToggle={() => setOrin(!orin)}><Orin runs={done} /></Section>}
     </div>
     </div>
@@ -112,7 +116,7 @@ function Diff({ header, runs, suites, initial }: { header: ReactNode; runs: Run[
   const p = shown[cur];
   const gt = (row: HeldoutPair["row"]): Pred | null => (row.skill === "detect" ? { boxes: row.boxes ?? [] } : row.skill === "point" ? { points: row.points ?? [] } : null);
   const asPred = (skill: Skill, v: unknown): Pred => (skill === "detect" ? { boxes: v as number[][] } : skill === "point" ? { points: v as number[][] } : { text: String(v ?? "") });
-  const H = "calc(100vh - 330px)";
+  const H = "calc(100vh - 290px)";
   const nBetter = shown.filter(better).length;
   return (
     <div className="page">
@@ -190,7 +194,7 @@ function Play({ header, models, reviewer }: { header: ReactNode; models: Model[]
   };
   const spatial = skill === "detect" || skill === "point";
   const pa = res?.base?.pred ?? null, pb = res?.[b]?.pred ?? null;
-  const H = "calc(100vh - 290px)";
+  const H = "calc(100vh - 250px)";
   const src = image ? api.imageUrl(image.id, 2048) : "";
   const lbl = (n: string) => models.find((m) => m.name === n)?.label ?? n;
   const pick = (s: Skill, p: string) => { setSkill(s); setPrompt(p); };

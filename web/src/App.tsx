@@ -2,7 +2,7 @@
 // missing, and the per-page key help. Data (images, labelling, review, export) lives inside
 // a dataset; training and testing are the next two steps.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, nameStore, type Batch, type Status, type Summary } from "./api";
 import { HelpOverlay, NameDialog, Pill, ToastProvider, useToast } from "./components/ui";
 import { Fade, MotionRoot } from "./components/motion";
@@ -18,7 +18,7 @@ const STEPS = [
 export type Step = (typeof STEPS)[number][0];
 
 const HELP: Record<Step, [string, string][]> = {
-  datasets: [["拖曳照片到虛線區", "加入資料集"], ["點縮圖", "進檢查看那張"], ["Enter", "檢查：存這題，到下一題"], ["Shift+Enter", "這張剩下的全照畫面存"], ["D", "丟棄這題"], ["Y / N", "是非題：yes / no（直接存）"], ["0–9 · ↑↓", "數量題：填數字 / 加減"], ["1 / 2", "用預標 / 用模型的答案"], ["3", "框／點題：補上預標有、目前沒有的"], ["P", "detect 題：存的時候同時存同物件的 point（框中心）開／關"], ["Backspace", "刪最後一個框／點"], ["E", "改答案（文字題）"], ["Z", "還原這題"], ["← / →", "上一題 / 下一題"], ["S", "跳過這張"], ["G", "所有圖"], ["F", "回到全圖"], ["H（按住）", "看原圖"], ["Tab", "選下一個框/點"], ["方向鍵（選取時）", "微移 1px，Shift 10px"], ["Delete", "刪框/點"], ["滾輪 · 空白鍵拖曳", "縮放 · 移動"]],
+  datasets: [["拖曳照片到虛線區", "加入資料集"], ["點縮圖", "進檢查看那張"], ["Enter", "檢查：存這題，到下一題"], ["Shift+Enter", "這張剩下的全照畫面存"], ["D", "丟棄這題"], ["Y / N", "是非題：yes / no（直接存）"], ["0–9 · ↑↓", "數量題：填數字 / 加減"], ["1 / 2", "用預標 / 用模型的答案"], ["3", "框／點題：補上預標有、目前沒有的"], ["P", "detect 題：存的時候同時存同物件的 point（框中心）開／關"], ["Backspace", "刪最後一個框／點"], ["E", "改答案（文字題）"], ["Z", "還原這題"], ["← / →", "上一題 / 下一題"], ["S", "跳過這張"], ["G", "所有圖"], ["F", "回到全圖"], ["H（按住）", "看原圖"], ["拖曳 / 拖角 / 點框", "detect：畫框、縮放、選取（預標框被蓋到會變綠 ✓）"], ["點一下 / 拖點", "point：加點、移動（紅點＝不在任何預標框裡）"], ["Tab", "選下一個框/點"], ["方向鍵（選取時）", "微移 1px，Shift 10px"], ["Delete", "刪框/點"], ["滾輪 · Space／中鍵／右鍵拖曳", "縮放 · 移動畫面"]],
   train: [["Enter（欄位內）", "開始訓練"], ["?", "說明"]],
   test: [["← / →（看差異）", "上一題 / 下一題"], ["?", "說明"]],
 };
@@ -35,6 +35,15 @@ function Shell() {
   const [name, setName] = useState(nameStore.get());
   const [askName, setAskName] = useState(!nameStore.get());
   const [help, setHelp] = useState(false);
+  const [sys, setSys] = useState(false);
+  useEffect(() => {
+    // the system popover closes on any click outside it, and on Esc
+    if (!sys) return;
+    const close = (e: Event) => { if (e instanceof KeyboardEvent ? e.key === "Escape" : !(e.target as HTMLElement).closest(".sys")) setSys(false); };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", close); };
+  }, [sys]);
   const [guard, setGuardState] = useState<(() => boolean) | null>(null); // review's unsaved-changes check
   const setGuard = useCallback((g: (() => boolean) | null) => setGuardState(() => g), []);
   const { say } = useToast();
@@ -60,12 +69,18 @@ function Shell() {
   const go = (s: Step) => { if (guard && !guard()) return; setStep(s); };
   const e = status?.engine;
   const running: Batch | undefined = sum?.batches.find((b) => b.job?.state === "running");
-  const counts: Record<Step, string> = {
-    datasets: sum ? (sum.images ? `${sum.images} 張 · ${sum.items} 題${sum.images_pending ? ` · 還有 ${sum.images_pending} 張要看` : ""}` : "還沒有資料") : "",
-    train: sum ? `${sum.trainable} 筆可訓練` : "",
-    test: "",
+  // one short state per step (the numbers live on each page's title row): a dot when there is
+  // something to do there, ✓ when it is done
+  const nModels = Math.max(0, (status?.models.length ?? 1) - 1);
+  const badge: Record<Step, ReactNode> = {
+    datasets: !sum ? "" : sum.images_pending ? <><i className="dot d-warn" />{sum.images_pending} 張待看</> : sum.items ? "✓ 都看完了" : "還沒有資料",
+    train: !sum ? "" : sum.trainable ? `${sum.trainable} 筆可訓` : "還沒有可訓的題",
+    test: nModels ? `${nModels} 個模型可比` : "還沒有模型",
   };
-  const gpuText = e?.busy ? (running ? `工作中：標註 ${running.name} ${running.job?.done ?? 0}/${running.job?.total ?? 0}` : "工作中") : "閒置";
+  const gpuText = e?.busy ? (running ? `標註 ${running.name} ${running.job?.done ?? 0}/${running.job?.total ?? 0}` : "GPU 工作中") : "閒置";
+  const lowGpu = !!e && !e.busy && e.gpu_free_gb != null && e.gpu_free_gb < (e.judge_need_gb ?? 70) && !e.judge_loaded;
+  const sysLevel = down || e?.last_error ? "bad" : e && (!e.weights_ok || !e.judge_ok) ? "bad" : lowGpu || e?.judge_name === "Qwen3-VL-8B" ? "warn" : e?.busy ? "busy" : "ok";
+  const sysText = down ? "連不到 server" : !e ? "連線中…" : !e.weights_ok ? "模型權重缺" : !e.judge_ok ? "出題模型缺" : e.last_error ? "上次有錯誤" : e.busy ? gpuText : lowGpu ? `GPU 剩 ${e.gpu_free_gb!.toFixed(0)} GB` : e.judge_name === "Qwen3-VL-8B" ? "用 8B 出題" : "系統正常";
 
   return (
     <>
@@ -74,21 +89,26 @@ function Shell() {
         <nav className="steps">
           {STEPS.map(([k, l, d]) => (
             <a key={k} href={`#${k}`} className={k === step ? "cur" : ""} title={d} onClick={(ev) => { ev.preventDefault(); go(k); }}>
-              <span className="t">{l}</span><small className="muted">{counts[k]}</small>
+              <span className="t">{l}</span><small className="muted">{badge[k]}</small>
             </a>
           ))}
         </nav>
         <div className="right hint">
           <span className="who" title="點一下改名字" onClick={() => setAskName(true)}>{name || "（沒填名字）"}</span>
-          {down ? <Pill kind="bad">連不到 server，重試中…</Pill> : e ? (
-            <>
-              {!e.weights_ok && <Pill kind="warn" title={`模型權重不在 ${e.weights}`} onClick={() => say(`模型權重不在 ${e.weights}。在 GB300 上：hf download moondream/moondream3.1-9B-A2B model.safetensors --local-dir model-cache/moondream31/weights`, "warn", { sticky: true })}>模型權重缺</Pill>}
-              {!e.judge_ok && <Pill kind="warn" title={`出題模型不在 ${e.judge}`} onClick={() => say(`出題模型不在 ${e.judge}（model-cache/judge 要指到 Qwen3-VL-32B-Instruct；或下載 Qwen3-VL-8B-Instruct 到 model-cache/judge-8b）`, "warn", { sticky: true })}>出題模型缺</Pill>}
-              {e.judge_name === "Qwen3-VL-8B" && <Pill kind="warn" title="GPU 放不下 32B，這次用 8B 出題：題目與比對品質略低。等 GPU 空了重啟 server 會回到 32B">出題模型：8B（小）</Pill>}
-              {e.busy ? <Pill kind="ok">GPU {gpuText}</Pill> : e.gpu_free_gb !== undefined && e.gpu_free_gb !== null && e.gpu_free_gb < (e.judge_need_gb ?? 70) && !e.judge_loaded ? <Pill kind="warn" title={`出題模型至少要 ${e.judge_need_gb ?? 70} GB、Moondream 約 24 GB；別的訓練正在用 GPU，等它結束`}>GPU 被別的訓練佔用，剩 {e.gpu_free_gb.toFixed(0)} GB</Pill> : <Pill kind="grey">GPU 閒置{e.gpu_free_gb ? `，剩 ${e.gpu_free_gb.toFixed(0)} GB` : ""}</Pill>}
-              {e.last_error && <Pill kind="bad" title={e.last_error} onClick={() => say(e.last_error!, "bad", { sticky: true, action: { label: "知道了", run: () => fetch("/api/status/clear-error", { method: "POST" }).then(refresh) } })}>上次錯誤</Pill>}
-            </>
-          ) : <span className="muted">連線中…</span>}
+          <span className="sys">
+            <Pill kind={sysLevel === "bad" ? "bad" : sysLevel === "warn" ? "warn" : "grey"} onClick={() => setSys(!sys)} title="系統狀態"><i className={`dot d-${sysLevel}`} />{sysText}</Pill>
+            {sys && (
+              <div className="sys-pop">
+                {down && <div className="it"><b>server</b><span className="bad">連不到，每 5 秒重試，畫面不會清空</span></div>}
+                {e && <>
+                  <div className="it"><b>GPU</b><span>{e.busy ? `工作中：${gpuText}` : "閒置"}{e.gpu_free_gb != null ? ` · 剩 ${e.gpu_free_gb.toFixed(0)} GB` : ""}{lowGpu ? <span className="warn-text">（出題要 {e.judge_need_gb ?? 70} GB，別的訓練佔著；等它結束）</span> : ""}</span></div>
+                  <div className="it"><b>模型權重</b><span className={e.weights_ok ? "" : "bad"}>{e.weights_ok ? "✓ Moondream 3.1" : `缺：hf download moondream/moondream3.1-9B-A2B model.safetensors --local-dir model-cache/moondream31/weights`}</span></div>
+                  <div className="it"><b>出題模型</b><span className={e.judge_ok ? "" : "bad"}>{!e.judge_ok ? "缺：model-cache/judge（Qwen3-VL-32B）或 model-cache/judge-8b" : e.judge_name ? `${e.judge_name}${e.judge_name === "Qwen3-VL-8B" ? "（GPU 放不下 32B，品質略低；GPU 空了重啟回 32B）" : ""}` : "還沒載入（第一次標註時載入）"}</span></div>
+                  {e.last_error && <div className="it"><b>上次錯誤</b><span className="bad" style={{ overflowWrap: "anywhere" }}>{e.last_error} <button className="ghost" onClick={() => fetch("/api/status/clear-error", { method: "POST" }).then(refresh)}>知道了</button></span></div>}
+                </>}
+              </div>
+            )}
+          </span>
         </div>
       </header>
       <main>

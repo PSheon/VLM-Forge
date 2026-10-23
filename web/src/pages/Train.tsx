@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, fmt, fmtDelta, phaseLabel, suiteLabel, type Dataset, type Run, type Status } from "../api";
-import { ActionsHead, Bar, ConfirmDialog, PageHead, Pill, useToast } from "../components/ui";
+import { ActionsHead, Bar, ConfirmDialog, PageHead, Pill, Skeleton, useToast } from "../components/ui";
 import { Fade, Item, Pop, Stagger } from "../components/motion";
 import type { Step } from "../App";
 
@@ -13,6 +13,7 @@ type SkillKey = (typeof SKILL_KEYS)[number];
 export default function Train({ status, go, reviewer }: { status: Status | null; go: (s: Step) => void; reviewer: string }) {
   const { say } = useToast();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [name, setName] = useState("");
@@ -25,7 +26,7 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   const [openRun, setOpenRun] = useState<string | null>(null);
   // every dataset is listed; only those with confirmed questions can be picked (all of them
   // are, by default), so a new or still-labelling dataset is visible with the reason it is out
-  const load = useCallback(() => { api.datasets().then((d) => { setDatasets(d); setPicked((p) => (p.length ? p.filter((id) => d.some((x) => x.id === id && x.trainable > 0)) : d.filter((x) => x.trainable > 0).map((x) => x.id))); }).catch(() => undefined); api.runs().then((r) => setRuns(r.runs)).catch(() => undefined); }, []);
+  const load = useCallback(() => { api.datasets().then((d) => { setDatasets(d); setLoaded(true); setPicked((p) => (p.length ? p.filter((id) => d.some((x) => x.id === id && x.trainable > 0)) : d.filter((x) => x.trainable > 0).map((x) => x.id))); }).catch(() => undefined); api.runs().then((r) => setRuns(r.runs)).catch(() => undefined); }, []);
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
   const chosen = datasets.filter((d) => picked.includes(d.id));
   const rows = chosen.reduce((a, d) => a + d.trainable, 0);
@@ -61,7 +62,8 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
 
         <div className="panel col">
           <div className="step-h"><span className="n">1</span><h3>選資料集</h3><span className="muted hint">點卡片勾選；只有確認過的題會進訓練，每個資料集留 10% 驗證集評分</span></div>
-          {datasets.length === 0 && <div className="empty">還沒有資料集。<button className="ghost" onClick={() => go("datasets")}>去建立 →</button></div>}
+          {!loaded && <div className="ds-pick"><Skeleton h={150} r={10} /><Skeleton h={150} r={10} /></div>}
+          {loaded && datasets.length === 0 && <div className="empty">還沒有資料集。<button className="ghost" onClick={() => go("datasets")}>去建立 →</button></div>}
           <Stagger className="ds-pick">
             {datasets.map((d) => {
               const on = picked.includes(d.id), off = d.trainable === 0;
@@ -165,7 +167,7 @@ export function RunCard({ r, go }: { r: Run; go: (s: Step) => void }) {
           )}
           {Object.entries(r.evals).filter(([k]) => k.startsWith("val-")).map(([k, m]) => <div key={k} className="muted">{suiteLabel(k)}：{Object.entries(m).map(([s, v]) => `${s} ${fmt(v)}`).join(" · ")}</div>)}
           {r.gate && <div className={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "比 base 好（過關）" : "沒有比 base 好"}。規則（工廠 CCTV 考卷）：每個 skill ≥ base − 1.0 點，且至少一個進步</div>}
-          {r.state === "done" && <button className="primary" onClick={() => go("test")} style={{ alignSelf: "flex-start" }}>去測試看差異 →</button>}
+          {r.state === "done" && <button className="ghost" onClick={() => go("test")} style={{ alignSelf: "flex-start" }}>去測試看差異 →</button>}
         </div>
       </div>
     </div>

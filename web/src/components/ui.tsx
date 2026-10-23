@@ -92,6 +92,11 @@ export function useEscBack(active: boolean, back: () => void) {
   }, [active, back]);
 }
 
+/** Grey placeholder blocks shown until the first response arrives (no layout jump). */
+export function Skeleton({ h = 16, w = "100%", r = 6, n = 1, gap = 8 }: { h?: number; w?: number | string; r?: number; n?: number; gap?: number }) {
+  return <div className="col" style={{ gap }} aria-busy="true" aria-label="載入中">{Array.from({ length: n }, (_, i) => <div key={i} className="skel" style={{ height: h, width: w, borderRadius: r }} />)}</div>;
+}
+
 export function Pill({ kind, children, title, onClick }: { kind?: "ok" | "bad" | "warn" | "grey"; children: ReactNode; title?: string; onClick?: () => void }) {
   return <span className={`pill ${kind ?? "grey"}${onClick ? " click" : ""}`} title={title} onClick={onClick}>{children}</span>;
 }

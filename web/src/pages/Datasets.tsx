@@ -2,9 +2,9 @@
 // 圖片（加圖、標註）／檢查（一次一題）／設定（AI 導師）／匯出. Everything about data
 // happens here; training and testing are the next two steps.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, parseFixed, phaseLabel, type Batch, type Dataset, type GridCell, type Skill, type Status } from "../api";
-import { ActionsHead, Bar, ConfirmDialog, Dialog, PageHead, Pill, Section, eta, useToast } from "../components/ui";
+import { ActionsHead, Bar, ConfirmDialog, Dialog, PageHead, Pill, Section, Skeleton, eta, useToast } from "../components/ui";
 import { Fade, Item, Pop, Stagger } from "../components/motion";
 import Review from "./Review";
 import type { Step } from "../App";
@@ -12,30 +12,31 @@ import type { Step } from "../App";
 type View = "images" | "review"; // the image grid, or the one-question-at-a-time review
 
 export default function Datasets({ status, refresh, go, reviewer, setGuard }: { status: Status | null; refresh: () => void; go: (s: Step) => void; reviewer: string; setGuard: (g: (() => boolean) | null) => void }) {
-  const [list, setList] = useState<Dataset[]>([]);
+  const [list, setList] = useState<Dataset[] | null>(null); // null until the first response
   const [cur, setCur] = useState<number | null>(() => { const m = location.hash.match(/ds=(\d+)/); return m ? +m[1] : null; });
   const [showNew, setShowNew] = useState(false);
-  const load = useCallback(() => api.datasets().then(setList).catch(() => undefined), []);
+  const load = useCallback(() => api.datasets().then(setList).catch(() => setList((l) => l ?? [])), []);
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
-  const detail = list.find((d) => d.id === cur) ?? null;
+  const detail = list?.find((d) => d.id === cur) ?? null;
   if (detail) return <Detail key={detail.id} d={detail} status={status} reload={() => { load(); refresh(); }} go={go} reviewer={reviewer} setGuard={setGuard} onBack={() => setCur(null)} onDeleted={() => { setCur(null); load(); }} />;
-  const tot = (k: "images" | "items" | "trainable" | "images_pending") => list.reduce((a, d) => a + (d[k] ?? 0), 0);
+  const tot = (k: "images" | "items" | "trainable" | "images_pending") => (list ?? []).reduce((a, d) => a + (d[k] ?? 0), 0);
   return (
     <div className="page">
       <div className="col">
         <PageHead title="資料集"><span className="muted hint">一個資料集＝一批照片＋AI 導師出的題＋你確認的答案</span></PageHead>
-        {list.length === 0 && <div className="empty">還沒有資料集。建一個，把照片丟進去，AI 導師先標一輪，你再檢查。</div>}
-        <Stagger className="cards">
-          {list.map((d) => <Item key={d.id}><DatasetCard d={d} onClick={() => setCur(d.id)} /></Item>)}
+        {list === null && <Skeleton h={88} r={10} n={3} />}
+        {list?.length === 0 && <div className="empty">還沒有資料集。建一個，把照片丟進去，AI 導師先標一輪，你再檢查。</div>}
+        <Stagger className="ds-list">
+          {(list ?? []).map((d) => <Item key={d.id}><DatasetRow d={d} onClick={() => setCur(d.id)} /></Item>)}
         </Stagger>
       </div>
       <div className="actions">
         <ActionsHead />
         <button className="primary big" onClick={() => setShowNew(true)}>＋ 新資料集</button>
-        {list.length > 0 && <div className="stat" style={{ flexWrap: "wrap" }}><span>資料集 <b>{list.length}</b></span><span>圖 <b>{tot("images")}</b></span><span>題 <b>{tot("items")}</b></span><span>已確認 <b>{tot("trainable")}</b></span><span>還要看 <b>{tot("images_pending")}</b> 張</span></div>}
+        {!!list?.length && <div className="stat" style={{ flexWrap: "wrap" }}><span>資料集 <b>{list?.length}</b></span><span>圖 <b>{tot("images")}</b></span><span>題 <b>{tot("items")}</b></span><span>已確認 <b>{tot("trainable")}</b></span><span>還要看 <b>{tot("images_pending")}</b> 張</span></div>}
         <div className="hint muted">可以陸續加圖、重複標註；每個資料集自動留 10% 當驗證集。</div>
       </div>
-      <NewDataset open={showNew} existing={list.map((d) => d.name)} onClose={() => setShowNew(false)} onCreated={(d) => { setShowNew(false); load(); setCur(d.id); }} />
+      <NewDataset open={showNew} existing={(list ?? []).map((d) => d.name)} onClose={() => setShowNew(false)} onCreated={(d) => { setShowNew(false); load(); setCur(d.id); }} />
     </div>
   );
 }
@@ -57,13 +58,20 @@ function statusPill(d: Dataset): [string, "ok" | "bad" | "warn" | "grey"] {
   return ["沒有圖", "grey"];
 }
 
-function DatasetCard({ d, onClick }: { d: Dataset; onClick: () => void }) {
+/** One dataset as a list row: thumbnails, name, how far review got, the numbers, its state. */
+function DatasetRow({ d, onClick }: { d: Dataset; onClick: () => void }) {
   const [text, kind] = statusPill(d);
+  const seen = d.images ? Math.round((100 * (d.images - d.images_pending)) / d.images) : 0;
   return (
-    <div className="card" onClick={onClick}>
-      <div className="row" style={{ justifyContent: "space-between" }}><span className="name">{d.name}</span><Pill kind={kind}>{text}</Pill></div>
+    <div className="ds-row" onClick={onClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onClick()}>
+      <div className="strip-th">{(d.thumbs ?? []).slice(0, 4).map((id) => <img key={id} src={api.imageUrl(id, 200)} alt="" loading="lazy" />)}{!(d.thumbs ?? []).length && <span className="muted small">沒有圖</span>}</div>
+      <div className="col" style={{ gap: 4, minWidth: 0 }}>
+        <div className="row"><span className="name">{d.name}</span><Pill kind={kind}>{text}</Pill></div>
+        <div className="row small muted"><span>{d.config.mode === "fixed" ? "只指定題目" : d.config.mode === "both" ? "自動出題＋指定題目" : "自動出題"}</span><span>· 更新 {d.updated_at.slice(5, 16).replace("T", " ")}</span></div>
+        <div className="progress" title={`看過 ${seen}%`}><i style={{ width: `${seen}%` }} /></div>
+      </div>
       <div className="stat"><span>圖 <b>{d.images}</b></span><span>題 <b>{d.items}</b></span><span>已確認 <b>{d.trainable}</b></span><span>驗證 <b>{d.val_images}</b></span></div>
-      <div className="small muted">{d.config.mode === "fixed" ? "只指定題目" : d.config.mode === "both" ? "自動出題＋指定題目" : "自動出題"} · 更新 {d.updated_at.slice(5, 16).replace("T", " ")}</div>
+      <span className="chev muted">›</span>
     </div>
   );
 }
@@ -94,7 +102,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [openSec, setOpenSec] = useState<"" | "teacher" | "export">("");
   const [openImage, setOpenImage] = useState<string | null>(null);
   const [full, setFull] = useState<Dataset | null>(null);
-  const [grid, setGrid] = useState<GridCell[]>([]);
+  const [grid, setGrid] = useState<GridCell[] | null>(null);
   const [dir, setDir] = useState("");
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -166,10 +174,12 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   // title row inside the left column, so the action column (and its primary button) starts at
   // the same height as on every other page. No tab bar: the grid is the page, review opens from
   // a thumbnail or the primary button, settings and export live in the action column.
-  const header = (
+  const header = (extra?: ReactNode) => (
     <PageHead back={tab === "review" ? { label: `← 全部圖片（${total}）`, onClick: () => setTab("images") } : { label: "← 資料集", onClick: onBack }} title={rename ? <span className="row"><input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doRename(); if (e.key === "Escape") setRename(false); }} style={{ width: 220, fontSize: 15 }} /><button className="primary" onClick={doRename}>存</button><button onClick={() => setRename(false)}>取消</button></span> : <>{d.name}<button className="ghost" onClick={() => setRename(true)} title="改名" aria-label="改名">✎</button></>}>
-      <Pill kind={pillKind} onClick={tab === "images" && pendingImgs > 0 ? () => setTab("review") : undefined}>{pillText}</Pill>
-      <span className="small muted">{(full ?? d).items ? `題 ${(full ?? d).items} · 已確認 ${(full ?? d).trainable} · ` : ""}驗證集 {(full ?? d).val_images} 張</span>
+      {extra ?? <>
+        <Pill kind={pillKind} onClick={tab === "images" && pendingImgs > 0 ? () => setTab("review") : undefined}>{pillText}</Pill>
+        <span className="hint muted">{(full ?? d).items ? `題 ${(full ?? d).items} · 已確認 ${(full ?? d).trainable} · ` : ""}驗證集 {(full ?? d).val_images} 張</span>
+      </>}
     </PageHead>
   );
   const modeText = mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`;
@@ -179,7 +189,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
       {tab === "images" && (
         <div className="page">
           <div className="col">
-            {header}
+            {header()}
             <div className={`drop${drag ? " on" : ""}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}>
               把照片拖到這裡，或 <button onClick={() => fileInput.current?.click()} disabled={busy}>選檔案</button>（可多張、可 zip）
               <input ref={fileInput} type="file" accept="image/*,.zip" multiple hidden onChange={(e) => addFiles(e.target.files)} />
@@ -188,8 +198,9 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
               <input placeholder="GB300 上的資料夾路徑，例如 /home/paul/VLM-Forge/workspace/captures/1026" value={dir} onChange={(e) => setDir(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addFolder()} style={{ flex: 1 }} />
               <button onClick={addFolder} disabled={busy || !dir.trim()}>加入資料夾</button>
             </div>
-            <div className="small muted">{grid.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查` : "還沒有圖"}</div>
-            <Grid cells={grid} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
+            <div className="small muted">{grid?.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查` : grid === null ? "載入中…" : "還沒有圖"}</div>
+            {grid === null && (full ?? d).images > 0 && <div className="thumbs" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))" }}>{Array.from({ length: Math.min(30, (full ?? d).images) }, (_, i) => <div key={i} className="skel" style={{ aspectRatio: "4/3", borderRadius: 4 }} />)}</div>}
+            <Grid cells={grid ?? []} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
           <div className="actions">
             <ActionsHead />
@@ -200,7 +211,6 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
             <div className="row hint">
               {cta?.run !== label && unlabelled > 0 && !running && !interrupted(batch) && <span className="muted">{labelBlocked ? labelText : ""}</span>}
               {cta && !cta.text.startsWith("去檢查") && pendingImgs > 0 && !running && <button className="ghost" onClick={() => setTab("review")}>去檢查（{pendingImgs} 張）→</button>}
-              {cta && !cta.text.includes("去訓練") && trainable > 0 && <button className="ghost" onClick={() => go("train")}>去訓練（{trainable} 題）→</button>}
             </div>
             {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
             {full && full.batches && full.batches.length > 1 && (
