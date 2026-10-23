@@ -72,6 +72,7 @@ export interface DatasetConfig { mode?: "auto" | "both" | "fixed"; fixed?: strin
 
 export interface Dataset {
   id: number;
+  thumbs?: string[]; // first few image ids, for the list's thumbnail strip
   name: string;
   created_at: string;
   updated_at: string;

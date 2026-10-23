@@ -160,7 +160,7 @@ def test_dataset_flow(client, monkeypatch):
         == 1
     )
     d = client.get(f"/api/datasets/{ds['id']}").json()
-    assert d["images"] == 4 and d["unlabelled"] == 4
+    assert d["images"] == 4 and d["unlabelled"] == 4 and len(d["thumbs"]) == 4
     assert client.post(f"/api/datasets/{ds['id']}/folder", json={"dir": "/nope"}).status_code == 404
     assert client.post("/api/datasets/999/folder", json={"dir": str(folder)}).status_code == 404
     # label: auto + fixed, deduplicated per (skill, prompt)
