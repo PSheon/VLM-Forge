@@ -207,3 +207,13 @@ input.count { width: 110px; font-size: 24px; text-align: center; font-family: va
 .keybar { position: sticky; bottom: 0; z-index: 4; margin: 6px -16px -12px; padding: 7px 16px; background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .keybar kbd { transition: background-color .12s, color .12s, border-color .12s; }
 .keybar kbd.on { background: var(--acc); color: var(--acc-fg); border-color: var(--acc); }
+
+/* ② review: this image's questions, in the action column */
+.qlist { max-height: calc(100vh - 470px); min-height: 120px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+.qlist .it { display: flex; gap: 7px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.qlist .it:last-child { border-bottom: none; }
+.qlist .it.cur { background: var(--acc-soft); }
+.qlist .it.done { opacity: .55; }
+.qlist .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qlist .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--line); }
+.qlist .dot.fix { background: var(--bad); border-radius: 2px; } .qlist .dot.acc { background: var(--ok); } .qlist .dot.none { background: var(--muted); transform: rotate(45deg) scale(.8); border-radius: 2px; } .qlist .dot.done { background: var(--line); }

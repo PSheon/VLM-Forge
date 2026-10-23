@@ -37,11 +37,14 @@ export interface CanvasProps {
   focus?: number[][] | null; // boxes to zoom to (keyed by `focusKey`)
   focusKey?: string | number;
   fitAspect?: { maxOffset: number; min?: number };
+  sync?: View | null; // shared zoom/pan (two canvases of the same image side by side)
+  onSync?: (v: View) => void;
 }
+export interface View { z: number; t: { x: number; y: number } }
 
 const MIN_Z = 1, MAX_Z = 12;
 
-export default function Canvas({ src, skill, value, onChange, alt, readOnly, labels, height, compact, tags, focus, focusKey, fitAspect }: CanvasProps) {
+export default function Canvas({ src, skill, value, onChange, alt, readOnly, labels, height, compact, tags, focus, focusKey, fitAspect, sync, onSync }: CanvasProps) {
   const view = useRef<HTMLDivElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const img = useRef<HTMLImageElement>(null);
@@ -87,6 +90,9 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
     window.addEventListener("resize", size);
     return () => window.removeEventListener("resize", size);
   }, [fitAspect, nat]);
+  // view sync: publish our zoom/pan, follow the other canvas's; equal values stop the ping-pong
+  useEffect(() => { if (onSync && !(sync && sync.z === z && sync.t.x === t.x && sync.t.y === t.y)) onSync({ z, t }); }, [z, t]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (sync && (sync.z !== z || sync.t.x !== t.x || sync.t.y !== t.y)) { setZ(sync.z); setT(sync.t); } }, [sync]); // eslint-disable-line react-hooks/exhaustive-deps
   const fk = `${src}|${focusKey ?? ""}`;
   useEffect(() => {
     // zoom to the union of the focus boxes once the layout for this image is known
