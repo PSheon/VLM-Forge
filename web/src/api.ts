@@ -94,6 +94,7 @@ export interface Dataset {
   trainable_images: number; // train-split images with at least one confirmed question
   trainable_by_skill?: Partial<Record<Skill, number>>;
   spot?: { total: number; pending: number; agree: number; changed: number }; // teacher-trust sample
+  val_rows?: number; // confirmed questions in the val split
   batches?: Batch[];
   unlabelled?: number;
 }

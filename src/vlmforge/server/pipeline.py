@@ -62,7 +62,11 @@ def write_config(
                 for s in paths.HELDOUT_SUITES
                 if (paths.MANIFESTS / f"{s}.jsonl").exists()
             ],
-            "val_images": 0 if val_jsonl else min(50, n_images // 20),
+            # without the datasets' own val rows, hold out ~10 % of the train images (≥ 5
+            # images) so the run still has a val curve; ft-1023-1911 trained blind
+            "val_images": 0
+            if val_jsonl
+            else (min(50, max(1, n_images // 10)) if n_images >= 5 else 0),
             **({"val": [str(p) for p in val_jsonl]} if val_jsonl else {}),
             "max_objects": 50,
             "max_text": 384,
