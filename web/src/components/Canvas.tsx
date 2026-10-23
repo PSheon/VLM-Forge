@@ -159,6 +159,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
       if (e.key === "f" || e.key === "F") reset();
       if (!editable) return;
       if ((e.key === "Delete" || e.key === "Backspace") && sel !== null) { e.preventDefault(); removeSel(); }
+      else if (e.key === "Backspace" && n > 0 && onChange) { e.preventDefault(); if (skill === "detect") onChange({ boxes: boxes.slice(0, -1) }, "刪了最後一框"); else onChange({ points: points.slice(0, -1) }, "刪了最後一點"); }
       if (e.key === "Tab" && n > 0) { e.preventDefault(); setSel(sel === null ? 0 : (sel + 1) % n); }
       if (e.key.startsWith("Arrow") && sel !== null) {
         e.preventDefault();
@@ -235,7 +236,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
               {editable && sel === i && [0, 1, 2, 3].map((c) => <div key={c} data-i={i} data-corner={c} className={`h h${c}`} />)}
             </div>
           ))}
-          {overlays && skill === "point" && points.map((p, i) => <div key={i} data-i={i} className={`pt${sel === i ? " sel" : ""}${editable ? "" : " ro"}`} style={{ left: pct(p[0]), top: pct(p[1]) }} title={`${i + 1}`} />)}
+          {overlays && skill === "point" && points.map((p, i) => <div key={i} data-i={i} className={`pt${sel === i ? " sel" : ""}${editable ? "" : " ro"}`} style={{ left: pct(p[0]), top: pct(p[1]) }} title={`${i + 1}`}><span className="tag">{tags?.[i] ?? `${i + 1}`}</span></div>)}
           {drag?.kind === "new" && <div className="draft" style={boxStyle(fix([drag.x0, drag.y0, drag.x1, drag.y1]))} />}
         </div>
         <Pop show={!ready} className="cv-loading">

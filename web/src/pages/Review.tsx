@@ -1,13 +1,13 @@
 // ② 檢查 (docs/ui-spec §4): one image, one question at a time; every key saves and moves on.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
 import Canvas from "../components/Canvas";
 import { Dialog, Pill, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
 import type { Step } from "../App";
 
-export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void }) {
+export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard, header }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void; header?: ReactNode }) {
   const { say } = useToast();
   const dsId = datasetId;
   const [sum, setSum] = useState<Dataset | null>(null);
@@ -100,6 +100,21 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     } catch (e) { say(String(e), "bad"); }
   }, [review, items, it, label, reviewer, refresh, nextImage, open, say]);
   const edit = (p: Pred, what: string) => { setLabel(p); setDirty(true); say(`${what}（還沒存，Enter 存）`, "warn"); };
+  // 3: add what the pre-label has and the current answer lacks (a point at the centre of each
+  // pre-label box without one; pre-label boxes that overlap nothing) — the common fix for
+  // "the model missed some"
+  const fillFromTeacher = () => {
+    if (!it?.teacher) return;
+    if (it.skill === "point") {
+      const pts = label?.points ?? [];
+      const add = (it.teacher.boxes ?? []).filter((b) => !pts.some((p) => p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3])).map((b) => [+((b[0] + b[2]) / 2).toFixed(4), +((b[1] + b[3]) / 2).toFixed(4)]);
+      if (add.length) edit({ points: [...pts, ...add] }, `補了 ${add.length} 點（預標框中心）`); else say("預標的框都已經有點了");
+    } else if (it.skill === "detect") {
+      const cur = label?.boxes ?? [];
+      const add = (it.teacher.boxes ?? []).filter((b) => !cur.some((c) => iou(c, b) > 0.3));
+      if (add.length) edit({ boxes: [...cur, ...add] }, `補了 ${add.length} 框（預標）`); else say("預標的框都已經有了");
+    }
+  };
   const removePhrase = (ph: string) => { const t = (label?.text ?? "").replace(ph, "").replace(/\s{2,}/g, " ").replace(/\s+([,.;])/g, "$1").trim(); edit({ text: t }, `刪掉「${ph}」`); };
 
   useEffect(() => {
@@ -118,6 +133,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       else if (e.key === "d" || e.key === "D") discard();
       else if (e.key === "1" && it?.teacher) edit(structuredClone(it.teacher), "改用預標");
       else if (e.key === "2" && it?.pred) edit(structuredClone(it.pred), "改用模型答案");
+      else if (e.key === "3" && spatial && it?.teacher) fillFromTeacher();
       else if ((e.key === "e" || e.key === "E") && !spatial) { e.preventDefault(); textRef.current?.focus(); }
       else if ((e.key === "z" || e.key === "Z") && it) { setLabel(initial(it)); setDirty(false); say("已還原"); }
       else if (e.key === "ArrowRight" && !e.shiftKey && !spatialSelected()) goTo(idx + 1);
@@ -131,9 +147,10 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
   });
   const spatialSelected = () => !!document.querySelector(".cv-stage .sel"); // arrows nudge a selected box instead
 
-  if (sum && sum.items === 0) return <div className="empty">這個資料集還沒有題。到「圖片」分頁加照片、按「標註」。</div>;
+  const shell = (body: ReactNode) => <div className="page"><div className="col">{header}{body}</div><div className="actions" /></div>;
+  if (sum && sum.items === 0) return shell(<div className="empty">這個資料集還沒有題。到「圖片」分頁加照片、按「標註」。</div>);
   if (!review || !it) {
-    return <div className="empty">{msg === "都看完了" ? <>這個資料集都看完了（已確認 {sum?.trainable ?? 0} 題）。<button className="primary" onClick={() => go("train")} style={{ marginLeft: 8 }}>去訓練 →</button></> : msg ? <span className="row" style={{ justifyContent: "center" }}><span className="bad">{msg}</span><button onClick={() => nextImage()}>重試</button></span> : sum?.images_pending ? <span className="row" style={{ justifyContent: "center" }}><i className="spin" />載入中…</span> : "沒有待看的圖。到「圖片」分頁點任一張可以重看。"}</div>;
+    return shell(<div className="empty">{msg === "都看完了" ? <>這個資料集都看完了（已確認 {sum?.trainable ?? 0} 題）。<button className="primary" onClick={() => go("train")} style={{ marginLeft: 8 }}>去訓練 →</button></> : msg ? <span className="row" style={{ justifyContent: "center" }}><span className="bad">{msg}</span><button onClick={() => nextImage()}>重試</button></span> : sum?.images_pending ? <span className="row" style={{ justifyContent: "center" }}><i className="spin" />載入中…</span> : "沒有待看的圖。到「圖片」分頁點任一張可以重看。"}</div>);
   }
   const changed = JSON.stringify(label) !== JSON.stringify(it.pred);
   const unsupported = it.skill === "caption" ? (it.judge?.unsupported ?? []).filter((p) => (label?.text ?? "").includes(p)) : [];
@@ -142,14 +159,15 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
   const fmtHint = it.skill === "query" ? (/how many|count/i.test(it.prompt) ? "數量題：用數字作答" : /^(is|are|does|do|can|has|have)\b/i.test(it.prompt) ? "是非題：yes / no" : "") : "";
   return (
     <div className="rv">
-      <div className="rv-top row">
-        <span className="muted hint">{review.image.path.split("/").slice(-1)[0]}</span>
-        <Pill kind={pendingLeft ? "warn" : "ok"}>這張還有 {pendingLeft} 題</Pill>
-        <span className="muted hint">待看 {sum?.images_pending ?? 0} 張</span>
-        <span style={{ marginLeft: "auto" }} className="row"><button onClick={() => setGrid(!grid)} title="G">所有圖</button></span>
-      </div>
       <div className="page">
         <div className="col" style={{ minWidth: 0 }}>
+          {header}
+          <div className="rv-top row">
+            <span className="muted hint">{review.image.path.split("/").slice(-1)[0]}</span>
+            <Pill kind={pendingLeft ? "warn" : "ok"}>這張還有 {pendingLeft} 題</Pill>
+            <span className="muted hint">待看 {sum?.images_pending ?? 0} 張</span>
+            <span style={{ marginLeft: "auto" }} className="row"><button onClick={() => setGrid(!grid)} title="G">所有圖</button></span>
+          </div>
           <Fade k={it.id} y={4}>
             <div className={`q ${it.verdict === "fix" ? "q-fix" : it.verdict === "accept" ? "q-acc" : ""}`}>
               <div className="row" style={{ gap: 12 }}>
@@ -171,7 +189,8 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
             <>
               <div className="hint muted">目前 {summary(label)} · 預標 {summary(it.teacher)} · 模型 {summary(it.pred)}{changed ? " · ✎ 已改" : ""}</div>
               {negative && <div className="warn hint">確認這張沒有 {it.prompt}？（預標或模型有框，你全刪了）</div>}
-              <div className="row">{it.teacher && <button onClick={() => edit(structuredClone(it.teacher!), "改用預標")}><kbd>1</kbd> 用預標的{it.skill === "detect" ? "框" : "點"}</button>}{it.pred && <button onClick={() => edit(structuredClone(it.pred!), "改用模型答案")}><kbd>2</kbd> 用模型的{it.skill === "detect" ? "框" : "點"}</button>}</div>
+              <div className="row">{it.teacher && <button onClick={() => edit(structuredClone(it.teacher!), "改用預標")}><kbd>1</kbd> 用預標的{it.skill === "detect" ? "框" : "點"}</button>}{it.pred && <button onClick={() => edit(structuredClone(it.pred!), "改用模型答案")}><kbd>2</kbd> 用模型的{it.skill === "detect" ? "框" : "點"}</button>}{it.teacher?.boxes?.length ? <button onClick={fillFromTeacher} title="預標有、目前沒有的，補上"><kbd>3</kbd> 補預標缺的{it.skill === "detect" ? "框" : "點"}</button> : null}</div>
+              <div className="hint muted">{it.skill === "point" ? "點一下加點、拖點移動、點選後 Del 刪、Backspace 刪最後一點；點要落在藍色預標框內才算一致" : "拖曳畫框、拖角縮放、點框選取；Del 刪選取、Backspace 刪最後一框"}</div>
             </>
           ) : (
             <>
@@ -203,7 +222,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
           <div className="hint muted">{reviewer} 認領中{claimedOther ? `（${claimedOther} 也在看）` : ""}</div>
         </Fade>
       </div>
-      <KeyBar pressed={pressed} keys={[["Enter", changed ? "存修正" : "沒問題"], ...(qt === "yesno" ? [["Y", "yes"], ["N", "no"]] as [string, string][] : qt === "count" ? [["0–9", "數字"], ["↑↓", "加減"]] as [string, string][] : []), ["D", "丟棄"], ...(it.teacher ? [["1", "用預標"]] as [string, string][] : []), ...(it.pred ? [["2", "用模型"]] as [string, string][] : []), ...(spatial ? [["Tab", "選框"], ["Del", "刪框"], ["F", "全圖"]] as [string, string][] : qt === "text" || it.skill === "caption" ? [["E", "改文字"]] as [string, string][] : []), ["←→", "換題"], ["Shift+Enter", `剩 ${pendingLeft} 題全存`], ["S", "跳過"], ["G", "所有圖"]]} />
+      <KeyBar pressed={pressed} keys={[["Enter", changed ? "存修正" : "沒問題"], ...(qt === "yesno" ? [["Y", "yes"], ["N", "no"]] as [string, string][] : qt === "count" ? [["0–9", "數字"], ["↑↓", "加減"]] as [string, string][] : []), ["D", "丟棄"], ...(it.teacher ? [["1", "用預標"]] as [string, string][] : []), ...(it.pred ? [["2", "用模型"]] as [string, string][] : []), ...(spatial ? [...(it.teacher?.boxes?.length ? [["3", "補預標缺的"]] as [string, string][] : []), ["Tab", "選取"], ["Del", "刪選取"], ["⌫", "刪最後"], ["F", "全圖"]] as [string, string][] : qt === "text" || it.skill === "caption" ? [["E", "改文字"]] as [string, string][] : []), ["←→", "換題"], ["Shift+Enter", `剩 ${pendingLeft} 題全存`], ["S", "跳過"], ["G", "所有圖"]]} />
       <Dialog open={!!pendingJump} onClose={() => setPendingJump(null)}>
         <h2>有改動還沒存</h2>
         <div className="hint">要丟掉這題的改動嗎？</div>
@@ -240,3 +259,4 @@ function KeyBar({ keys, pressed }: { keys: [string, string][]; pressed: string }
 const statusLabel: Record<Item["status"], string> = { pending: "待看", auto: "自動通過", approved: "已確認", corrected: "已修正", discarded: "丟棄" };
 const rank = (it: Item) => (it.status === "pending" && it.verdict === "fix" ? 0 : it.status === "pending" ? 1 : 2);
 const short = (t?: string) => ((t ?? "").length > 22 ? (t ?? "").slice(0, 22) + "…" : t ?? "");
+const iou = (a: number[], b: number[]) => { const w = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])), h = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1])); const i = w * h; const u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i; return u > 0 ? i / u : 0; };

@@ -163,8 +163,10 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [pillText, pillKind] = statusPill(full ?? d);
   const tabs: [Tab, string][] = [["images", `圖片 ${full?.images ?? d.images}`], ["review", `檢查${(full ?? d).images_pending ? ` ${(full ?? d).images_pending}` : ""}`], ["settings", "設定"], ["export", "匯出"]];
 
-  return (
-    <div className="col">
+  // the title row + tabs render inside the left column of every tab, so the action column
+  // (and its primary button) starts at the same height as on every other page
+  const header = (
+    <>
       <div className="row">
         <button className="ghost" onClick={onBack}>← 資料集</button>
         {rename ? <><input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doRename(); if (e.key === "Escape") setRename(false); }} style={{ width: 220 }} /><button className="primary" onClick={doRename}>存</button><button onClick={() => setRename(false)}>取消</button></> : <><h2>{d.name}</h2><button className="ghost" onClick={() => setRename(true)} title="改名">✎</button></>}
@@ -172,10 +174,15 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
         <span className="small muted">{(full ?? d).items ? `題 ${(full ?? d).items} · 已確認 ${(full ?? d).trainable} · ` : ""}驗證集 {(full ?? d).val_images} 張</span>
       </div>
       <div className="tabs big">{tabs.map(([k, l]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)}>{l}</button>)}</div>
+    </>
+  );
+  return (
+    <div className="col">
       <Fade k={tab}>
       {tab === "images" && (
         <div className="page">
           <div className="col">
+            {header}
             <div className={`drop${drag ? " on" : ""}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}>
               把照片拖到這裡，或 <button onClick={() => fileInput.current?.click()} disabled={busy}>選檔案</button>（可多張、可 zip）
               <input ref={fileInput} type="file" accept="image/*,.zip" multiple hidden onChange={(e) => addFiles(e.target.files)} />
@@ -205,11 +212,12 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
         </div>
       )}
 
-      {tab === "review" && <Review reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} />}
+      {tab === "review" && <Review reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} header={header} />}
 
       {tab === "settings" && (
         <div className="page">
           <div className="col">
+          {header}
           <div className="col panel">
             <h3>AI 導師怎麼標</h3>
             <label className="row"><input type="radio" name="mode" checked={mode === "auto"} onChange={() => setMode("auto")} /> 自動出題（導師看圖決定物件、問答、巡檢題、caption）</label>
@@ -244,10 +252,13 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
 
       {tab === "export" && (
         <div className="page">
+          <div className="col">
+          {header}
           <div className="panel col">
             <h3>匯出</h3>
             <div className="hint muted">已確認的題（人確認＋自動通過）→ jsonl（座標 0–1，含 split 欄）＋ 圖的 zip。訓練頁會直接讀資料集，不需要先匯出；匯出是給別的工具用的。</div>
             {exp ? <div className="hint">寫到 <code>{exp.jsonl}</code>（{exp.rows} 列）· <a href={api.downloadUrl(d.id, "jsonl")}>下載 jsonl</a>{exp.zip && <> · <a href={api.downloadUrl(d.id, "zip")}>下載圖 zip（{exp.images} 張）</a></>}</div> : <div className="hint muted">還沒匯出過。</div>}
+          </div>
           </div>
           <div className="actions">
             <button className="primary big" onClick={doExport} disabled={busy || !(full ?? d).trainable}>匯出 {(full ?? d).trainable} 題</button>

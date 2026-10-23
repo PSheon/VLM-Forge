@@ -1,7 +1,7 @@
 // ③ 測試 (docs/ui-spec §6): scores (base vs every run, held-out + val splits), per-item
 // diff, a single-image playground that can save into a dataset, and the Orin bundle.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api, defaultPrompt, emptyLabel, fmt, fmtDelta, phaseLabel, skillLabel, suiteLabel, summary, type Dataset, type HeldoutPair, type ImageRow, type Model, type Pred, type Run, type Skill } from "../api";
 import Canvas, { type View } from "../components/Canvas";
 import ImagePicker from "../components/ImagePicker";
@@ -23,31 +23,35 @@ export default function Test({ models, reviewer, go }: { models: Model[]; review
   const running = data?.runs.find((r) => r.state === "running");
   const suites = Array.from(new Set([...(data?.suites ?? []), ...done.flatMap((r) => Object.keys(r.evals))]));
   const tabs: [Tab, string, string][] = [["scores", "分數", ""], ["diff", "看差異", done.length ? "" : "要先有訓練好的模型"], ["play", "試一張", ""], ["orin", "匯出到 Orin", done.length ? "" : "要先有訓練好的模型"]];
-  return (
-    <div className="col">
+  const header = (
+    <>
       <div className="row">
         <h2>測試</h2>
         {running ? <Pill kind="warn">{running.name} {running.phase === "training" ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : phaseLabel(running.phase)}</Pill> : done.length ? <Pill kind="ok">{done.length} 個模型可比</Pill> : <Pill kind="grey">還沒有訓練好的模型</Pill>}
         <span className="muted hint">base＝原本的 Moondream；每個訓練好的模型都和它比</span>
       </div>
       <div className="tabs big">{tabs.map(([k, l, why]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)} disabled={!!why} title={why}>{l}</button>)}</div>
-      <Fade k={tab}>
-        {tab === "scores" && data && <Scores data={data} done={done} running={running} suites={suites} go={go} onDiff={(run, suite) => { setDiff({ run, suite }); setTab("diff"); }} />}
-        {tab === "diff" && <Diff runs={done} suites={suites} initial={diff} />}
-        {tab === "play" && <Play models={models} reviewer={reviewer} />}
-        {tab === "orin" && <Orin runs={done} />}
-      </Fade>
-    </div>
+    </>
+  );
+  return (
+    <Fade k={tab}>
+      {tab === "scores" && data && <Scores header={header} data={data} done={done} running={running} suites={suites} go={go} onDiff={(run, suite) => { setDiff({ run, suite }); setTab("diff"); }} />}
+      {tab === "diff" && <Diff header={header} runs={done} suites={suites} initial={diff} />}
+      {tab === "play" && <Play header={header} models={models} reviewer={reviewer} />}
+      {tab === "orin" && <Orin header={header} runs={done} />}
+      {tab === "scores" && !data && <div className="page"><div className="col">{header}<div className="empty"><i className="spin" />載入中…</div></div><div className="actions" /></div>}
+    </Fade>
   );
 }
 
 const suiteKind = (s: string): ["target" | "val" | "ref", string] => (s === "heldout-cctv" ? ["target", "v1 目標考卷"] : s.startsWith("val-") ? ["val", "你的資料集留下的 10%"] : ["ref", "參考，不當目標"]);
 
-function Scores({ data, done, running, suites, go, onDiff }: { data: { base: Record<string, Record<string, number>> }; done: Run[]; running?: Run; suites: string[]; go: (s: Step) => void; onDiff: (run: string, suite: string) => void }) {
+function Scores({ header, data, done, running, suites, go, onDiff }: { header: ReactNode; data: { base: Record<string, Record<string, number>> }; done: Run[]; running?: Run; suites: string[]; go: (s: Step) => void; onDiff: (run: string, suite: string) => void }) {
   const best = done[0];
   return (
     <div className="page">
     <div className="col">
+      {header}
       <div className="suites">
         {suites.map((s) => {
           const [kind, why] = suiteKind(s);
@@ -88,7 +92,7 @@ function Scores({ data, done, running, suites, go, onDiff }: { data: { base: Rec
   );
 }
 
-function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initial: { run: string; suite: string } | null }) {
+function Diff({ header, runs, suites, initial }: { header: ReactNode; runs: Run[]; suites: string[]; initial: { run: string; suite: string } | null }) {
   const [run, setRun] = useState(initial?.run ?? runs[0]?.name ?? "");
   const [suite, setSuite] = useState(initial?.suite ?? "heldout-cctv");
   const [filter, setFilter] = useState<"changed" | "better" | "worse" | "all">("changed");
@@ -117,6 +121,7 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
   return (
     <div className="page">
     <div className="col">
+      {header}
       <div className="panel row">
         <label className="row">模型 <select value={run} onChange={(e) => setRun(e.target.value)}>{runs.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}</select></label>
         <label className="row">考卷 <select value={suite} onChange={(e) => setSuite(e.target.value)}>{suites.map((s) => <option key={s} value={s}>{suiteLabel(s)}</option>)}</select></label>
@@ -161,7 +166,7 @@ const QUICK: [Skill, string][] = [
   ["detect", "person"], ["detect", "forklift"], ["detect", "helmet"], ["point", "person"], ["caption", "normal"],
 ];
 
-function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
+function Play({ header, models, reviewer }: { header: ReactNode; models: Model[]; reviewer: string }) {
   const { say } = useToast();
   const [image, setImage] = useState<ImageRow | null>(null);
   const [skill, setSkill] = useState<Skill>("detect");
@@ -194,6 +199,8 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
   const pick = (s: Skill, p: string) => { setSkill(s); setPrompt(p); };
   return (
     <div className="page">
+    <div className="col">
+    {header}
     <div className="play-left">
       <aside className="panel"><ImagePicker value={image?.id ?? null} onPick={setImage} /></aside>
       <section className="col" style={{ minWidth: 0 }}>
@@ -217,6 +224,7 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
         {!image && <div className="empty">左邊選一張圖。</div>}
       </section>
     </div>
+    </div>
       <div className="actions">
         <button className="primary big" onClick={run} disabled={!image || busy}>{busy ? "執行中…" : !image ? "先選一張圖" : `執行：${skillLabel[skill]} ${short(prompt)} ⏎`}</button>
         <div className="tabs">{SKILLS.map((s) => <button key={s} className={s === skill ? "cur" : ""} onClick={() => pick(s, defaultPrompt(s))}>{skillLabel[s]}</button>)}</div>
@@ -235,12 +243,13 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
 
 const short = (t: string) => (t.length > 26 ? t.slice(0, 26) + "…" : t);
 
-function Orin({ runs }: { runs: Run[] }) {
+function Orin({ header, runs }: { header: ReactNode; runs: Run[] }) {
   const [sel, setSel] = useState(runs[0]?.name ?? "");
   const r = runs.find((x) => x.name === sel);
   return (
     <div className="page">
       <div className="col">
+      {header}
       <div className="panel col">
         <h3>在 Orin AGX 上用</h3>
         <pre className="code">{`pip install moondream          # 帶 kestrel（Photon）
