@@ -231,7 +231,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
               <label className="f">側重（給導師的一句話）<input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="例如 night-shift factory floor" /></label>
               <div className="f"><span>出哪些 skill</span><div className="row">{(["detect", "point", "query", "caption"] as Skill[]).map((s) => <label key={s} className="row hint"><input type="checkbox" checked={skills.includes(s)} onChange={(e) => setSkills(e.target.checked ? [...skills, s] : skills.filter((x) => x !== s))} />{s}</label>)}</div></div>
               <label className="f">一次只標幾張（空＝全部還沒標的）<input type="number" min={1} value={n} onChange={(e) => setN(e.target.value === "" ? "" : +e.target.value)} style={{ width: 120 }} /></label>
-              <div className="row"><button onClick={saveConfig} disabled={!cfgDirty}>{cfgDirty ? "儲存設定" : "已儲存"}</button><span className="muted small">按「標註」時也會自動存；已出的題不變。</span></div>
+              <div className="row save-row"><button onClick={saveConfig} disabled={!cfgDirty}>{cfgDirty ? "儲存設定" : "已儲存"}</button><span className="muted small">按「標註」時也會自動存；已出的題不變。</span></div>
             </Section>
 
             <Section title="匯出" summary={exp ? `已匯出 ${exp.rows} 列` : `${trainable} 題可匯出`} open={openSec === "export"} onToggle={() => setOpenSec(openSec === "export" ? "" : "export")}>

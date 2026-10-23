@@ -224,7 +224,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
           <span className="legend" style={{ marginLeft: "auto" }}>
             {labels.main && <><i style={{ background: "var(--box)" }} />{labels.main} </>}
             {labels.alt && alt && <button className={`lg${showAlt ? " on" : ""}`} onClick={() => setShowAlt(!showAlt)} title="顯示／隱藏預標"><i style={{ borderTop: "3px dashed var(--box2)", background: "none", height: 0 }} />{labels.alt}</button>}
-            <span className="muted hint" title="按住 H 看原圖">H 原圖</span>
+            <span className="muted hint h-hint" title="按住 H 看原圖">H 原圖</span>
           </span>
         )}
       </div>
