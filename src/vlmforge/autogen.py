@@ -191,9 +191,47 @@ def parse_teacher(text: str) -> dict:
     }
 
 
-def items_from_teacher(t: dict, skills: set[str]) -> list[dict]:
-    """(skill, prompt, teacher) tuples for one image."""
+# Objects asked about on every image in auto mode: one the teacher did not list becomes a
+# negative detect question (0 boxes). Moondream over-detects on empty CCTV frames — person
+# F1 0.09 on the factory held-out vs 0.64 for the teacher, which says "none" correctly — and
+# auto questions alone only ask about what is visible, so these negatives are what can fix it.
+DEFAULT_PROBES = ["person", "forklift", "helmet"]
+# names the teacher may use for the same thing: listed under any of them = not absent
+PROBE_ALIASES = {
+    "person": {
+        "person",
+        "people",
+        "worker",
+        "workers",
+        "man",
+        "woman",
+        "staff",
+        "operator",
+        "employee",
+        "pedestrian",
+        "human",
+    },
+    "helmet": {"helmet", "hard hat", "hardhat", "safety helmet"},
+    "forklift": {"forklift", "fork lift", "forklift truck"},
+}
+
+
+def probe_items(t: dict, probes: list[str], skills: set[str]) -> list[dict]:
+    """Negative detect questions for the probes the teacher did not list on this image."""
+    if "detect" not in skills:
+        return []
+    seen = {o["name"].strip().lower() for o in t["objects"]}
     out = []
+    for p in probes:
+        names = PROBE_ALIASES.get(p.strip().lower(), {p.strip().lower()})
+        if not (seen & names) and not any(n in s for n in names for s in seen):
+            out.append({"skill": "detect", "prompt": p.strip(), "teacher": {"boxes": []}})
+    return out
+
+
+def items_from_teacher(t: dict, skills: set[str], probes: list[str] | None = None) -> list[dict]:
+    """(skill, prompt, teacher) tuples for one image; ``probes``: see DEFAULT_PROBES."""
+    out = probe_items(t, probes or [], skills)
     for o in t["objects"]:
         if o.get("skipped"):  # more instances than the teacher can box reliably
             continue

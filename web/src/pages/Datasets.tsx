@@ -3,7 +3,7 @@
 // happens here; training and testing are the next two steps.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, parseFixed, phaseLabel, type Batch, type Dataset, type GridCell, type Skill, type Status } from "../api";
+import { DEFAULT_PROBES, api, parseFixed, phaseLabel, type Batch, type Dataset, type GridCell, type Skill, type Status } from "../api";
 import { ActionsHead, Bar, ConfirmDialog, Dialog, PageHead, Pill, Section, Skeleton, askNotify, eta, useToast } from "../components/ui";
 import { Fade, Item, Pop, Stagger } from "../components/motion";
 import Review from "./Review";
@@ -111,6 +111,8 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [fixed, setFixed] = useState(d.config.fixed ?? "");
   const [topics, setTopics] = useState((d.config.topics ?? []).join("\n"));
   const [focus, setFocus] = useState(d.config.focus ?? "");
+  const [probes, setProbes] = useState((d.config.probes ?? DEFAULT_PROBES).join("\n"));
+  const probeList = probes.split("\n").map((x) => x.trim()).filter(Boolean);
   const [skills, setSkills] = useState<Skill[]>(d.config.skills ?? ["detect", "point", "query", "caption"]);
   const [n, setN] = useState<number | "">("");
   const [askDelete, setAskDelete] = useState(false);
@@ -128,10 +130,10 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const unlabelled = full?.unlabelled ?? 0;
   const judgeOk = status?.engine.judge_ok ?? true;
   const gpuBusy = !!status?.engine.busy && !running;
-  const cfgDirty = mode !== (d.config.mode ?? "auto") || fixed !== (d.config.fixed ?? "") || topics !== (d.config.topics ?? []).join("\n") || focus !== (d.config.focus ?? "") || skills.join() !== (d.config.skills ?? ["detect", "point", "query", "caption"]).join();
+  const cfgDirty = mode !== (d.config.mode ?? "auto") || fixed !== (d.config.fixed ?? "") || topics !== (d.config.topics ?? []).join("\n") || focus !== (d.config.focus ?? "") || skills.join() !== (d.config.skills ?? ["detect", "point", "query", "caption"]).join() || probeList.join() !== (d.config.probes ?? DEFAULT_PROBES).join();
 
   const saveConfig = async () => {
-    await api.updateDataset(d.id, { config: { mode, fixed, topics: topics.split("\n").map((s) => s.trim()).filter(Boolean), focus, skills } });
+    await api.updateDataset(d.id, { config: { mode, fixed, topics: topics.split("\n").map((s) => s.trim()).filter(Boolean), focus, skills, probes: probeList } });
     reload();
   };
   const addFiles = async (files: FileList | File[] | null) => {
@@ -232,6 +234,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
                 </>
               )}
               <label className="f">額外巡檢主題（每行一個；已內建值班、安全帽／背心／口罩／手套、出口、門、地面、堆高機、燈、管制區、無人看管物品）<textarea value={topics} onChange={(e) => setTopics(e.target.value)} style={{ minHeight: 54 }} /></label>
+              {mode !== "fixed" && <label className="f">每張圖都問的物件（每行一個；導師沒看到就當作「沒有」，教模型別亂畫框）<textarea value={probes} onChange={(e) => setProbes(e.target.value)} style={{ minHeight: 54 }} placeholder={DEFAULT_PROBES.join("\n")} /></label>}
               <label className="f">側重（給導師的一句話）<input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="例如 night-shift factory floor" /></label>
               <div className="f"><span>出哪些 skill</span><div className="row">{(["detect", "point", "query", "caption"] as Skill[]).map((s) => <label key={s} className="row hint"><input type="checkbox" checked={skills.includes(s)} onChange={(e) => setSkills(e.target.checked ? [...skills, s] : skills.filter((x) => x !== s))} />{s}</label>)}</div></div>
               <label className="f">一次只標幾張（空＝全部還沒標的）<input type="number" min={1} value={n} onChange={(e) => setN(e.target.value === "" ? "" : +e.target.value)} style={{ width: 120 }} /></label>

@@ -106,3 +106,26 @@ def test_grounded_count_answer():
         ]
         == "accept"
     )
+
+
+def test_probes_add_negatives_for_what_the_teacher_did_not_list():
+    """Auto mode asks the probe objects on every image; absent ones become 0-box detect
+    questions, unless the teacher listed them under another name (worker = person)."""
+    from vlmforge.autogen import DEFAULT_PROBES, items_from_teacher
+
+    t = {
+        "objects": [
+            {"name": "worker", "count": 2, "boxes": [[0.1, 0.1, 0.2, 0.3]]},
+            {"name": "pallet", "count": 1, "boxes": []},
+        ],
+        "questions": [],
+        "caption": "",
+    }
+    items = items_from_teacher(t, {"detect", "point"}, DEFAULT_PROBES)
+    zero = sorted(
+        i["prompt"] for i in items if i["skill"] == "detect" and not i["teacher"]["boxes"]
+    )
+    assert zero == ["forklift", "helmet", "pallet"]  # two probes + the listed-but-unboxed pallet
+    assert not any(i["prompt"] == "person" for i in items)  # listed as "worker"
+    assert items_from_teacher(t, {"query"}, DEFAULT_PROBES) == []  # no detect skill, no probes
+    assert not [i for i in items_from_teacher(t, {"detect"}) if i["prompt"] in DEFAULT_PROBES]
