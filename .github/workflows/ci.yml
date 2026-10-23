@@ -1,9 +1,11 @@
-# Lint + CPU-only unit tests (GOALS §9). Nothing here touches a GPU or the data host.
+# Lint + CPU-only unit tests + the web build (GOALS §9). Nothing here touches a GPU or the data
+# host. The UI smoke test (web/e2e) needs a live server and runs by hand before UI merges.
 name: ci
 on:
   pull_request:
   push:
     branches: [dev, main]
+  workflow_dispatch:
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -14,3 +16,19 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest -q
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      - run: npm run build
