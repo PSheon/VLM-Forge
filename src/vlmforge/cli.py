@@ -108,7 +108,12 @@ def main(argv: list[str] | None = None) -> int:
             args.json.write_text(json.dumps(res, indent=1))
         return 0 if res["passed"] else 1
     if args.command == "serve":
+        import os
+
         import uvicorn
+
+        # shared GPU: let the allocator grow in segments instead of fragmenting to OOM
+        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
         from .server.api import create_app
         from .server.engine import Engine

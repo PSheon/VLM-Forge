@@ -9,6 +9,7 @@ image) and ``GET /api/heldout/diff`` (two eval reports). Runs: ``GET /api/runs``
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -19,11 +20,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import __version__, paths
+from ..orin import make_bundle
+from .datasets import DatasetStore
 from .export import export_incoming, export_train
 from .pipeline import DEFAULT_LR, DEFAULT_STEPS, Pipeline, default_name
-from .workspace import SKILLS, Workspace
+from .workspace import ALL, IMAGE_EXT, SKILLS, Workspace
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 GEN_BATCH = 8  # images per teacher call (GPU throughput; the 32B judge is the slow part)
 
 
@@ -101,6 +103,24 @@ class TrainIn(BaseModel):
     steps: int = DEFAULT_STEPS
     lr: float = DEFAULT_LR
     rank: int = 16
+    dataset_ids: list[int] = []  # empty = everything reviewed in the workspace
+    region_head: bool = False  # True breaks Photon loading (GOALS §3)
+
+
+class DatasetIn(BaseModel):
+    name: str
+    config: dict = {}
+    note: str = ""
+
+
+class DatasetUpdateIn(BaseModel):
+    name: str | None = None
+    config: dict | None = None
+
+
+class FolderIn(BaseModel):
+    dir: str
+    limit: int | None = None
 
 
 class JudgeIn(BaseModel):
@@ -208,9 +228,32 @@ def list_reports() -> list[dict]:
     return out
 
 
+def _is_oom(e: Exception) -> bool:
+    return "out of memory" in str(e).lower() or type(e).__name__ == "OutOfMemoryError"
+
+
+def _with_backoff(fn, paths_: list[str]):
+    """Run a batched GPU call; on CUDA OOM (the GB300 is shared, GOALS §3) halve the batch
+    down to one image before giving up."""
+    try:
+        return fn(paths_)
+    except Exception as e:  # noqa: BLE001
+        if not _is_oom(e) or len(paths_) == 1:
+            raise
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        mid = len(paths_) // 2
+        return _with_backoff(fn, paths_[:mid]) + _with_backoff(fn, paths_[mid:])
+
+
 def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     app = FastAPI(title="VLM-Forge", version=__version__)
-    jobs: dict[int, dict] = {}
+    jobs: dict[int, dict] = {}  # in memory: a restart loses them (hence /resume)
+    app.state.jobs = jobs
 
     # ------------------------------------------------------------------ status
     @app.get("/api/status")
@@ -222,6 +265,11 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             "jobs": jobs,
             "models": list_models(),
         }
+
+    @app.post("/api/status/clear-error")
+    def clear_error():
+        engine.clear_error()
+        return {"ok": True}
 
     @app.get("/api/models")
     def models():
@@ -282,7 +330,11 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             cache.parent.mkdir(parents=True, exist_ok=True)
             img = Image.open(im["path"]).convert("RGB")
             img.thumbnail((w, w * 4), Image.LANCZOS)
-            img.save(cache, "JPEG", quality=85)
+            # write-then-rename: a second request for the same image must never be served
+            # a half-written file (that showed up as images that never finished loading)
+            tmp = cache.with_name(f"{cache.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            img.save(tmp, "JPEG", quality=85)
+            os.replace(tmp, cache)
         return FileResponse(cache, headers={"Cache-Control": "max-age=86400"})
 
     # ------------------------------------------------------------------ inference
@@ -355,7 +407,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     def _predict_queue(qid: int, model: str, judge: bool):
         job = jobs[qid]
         try:
-            items = ws.items(qid, "pending")
+            items = ws.items(qid, "pending", ALL)
             by_prompt: dict[tuple[str, str], list[dict]] = {}
             for it in items:
                 if it["pred"] is None:
@@ -376,6 +428,18 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             job["state"] = "error"
             job["error"] = f"{type(e).__name__}: {e}"
 
+    def _batch(q: dict) -> dict:
+        """A queue row for the UI: its in-memory job, and for autogen batches what is still
+        unfinished (so an interrupted batch shows 「接著跑」 instead of looking done)."""
+        out = {**q, "job": jobs.get(q["id"])}
+        if q.get("mode") == "auto" and q.get("config"):
+            try:
+                out["unfinished"] = ws.unfinished(q["id"], json.loads(q["config"])["image_ids"])
+            except (KeyError, ValueError, TypeError):
+                pass
+        out.pop("config", None)
+        return out
+
     def _start(qid: int, target, *args):
         jobs[qid] = {"state": "running", "phase": "", "done": 0, "total": 0, "error": None}
         threading.Thread(target=target, args=(qid, *args), daemon=True).start()
@@ -388,6 +452,25 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             raise HTTPException(409, "not running")
         job["cancel"] = True
         return job
+
+    @app.post("/api/queues/{qid}/resume")
+    def resume_queue(qid: int):
+        """Pick an autogen batch up where it stopped (server restart, cancel, error):
+        unasked images, unanswered items, uncompared items, then triage."""
+        try:
+            q = ws.queue(qid)
+        except KeyError as e:
+            raise HTTPException(404) from e
+        if q.get("mode") != "auto" or not q.get("config"):
+            raise HTTPException(422, "只有自動標註的批次能接著跑")
+        if jobs.get(qid, {}).get("state") == "running":
+            raise HTTPException(409, "還在跑")
+        cfg = json.loads(q["config"])
+        if not any(ws.unfinished(qid, cfg["image_ids"]).values()):
+            raise HTTPException(409, "這批已經完成，沒有要接的")
+        _start(qid, _autogen_queue, cfg, True)
+        jobs[qid]["resumed"] = True  # before the thread gets there, so the reply says so
+        return _batch(q)
 
     @app.post("/api/queues/{qid}/judge")
     def judge_queue(qid: int):
@@ -428,15 +511,24 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         _start(q["id"], _predict_queue, body.model, body.judge)
         return {**ws.queue(q["id"]), "job": jobs[q["id"]]}
 
-    def _autogen_queue(qid: int, cfg: dict):
+    def _autogen_queue(qid: int, cfg: dict, resume: bool = False):
         """generating (teacher) -> predicting (student) -> judging (agreement; judge for
-        captions) -> triage by image."""
+        captions) -> triage by image. Every phase only does what is still missing, so the
+        same function resumes a batch that a restart or a cancel interrupted."""
         from ..autogen import agree, items_from_teacher
 
         job = jobs[qid]
         try:
+            from ..autogen import items_from_fixed, parse_fixed
+
             skills = set(cfg["skills"])
             images = cfg["image_ids"]
+            if resume:
+                have = {it["image_id"] for it in ws.items(qid, None, ALL)}
+                images = [i for i in images if i not in have]
+                job["resumed"] = True
+            mode = cfg.get("mode", "auto")  # auto | fixed | both
+            fixed = parse_fixed(cfg.get("fixed", "")) if mode in ("fixed", "both") else None
             job["phase"], job["total"], job["done"] = "generating", len(images), 0
             job["started"] = time.time()
             for k in range(0, len(images), GEN_BATCH):
@@ -445,9 +537,27 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                     return
                 chunk = images[k : k + GEN_BATCH]
                 paths_ = [ws.image(i)["path"] for i in chunk]
-                ts = engine.teacher_generate_batch(paths_, cfg.get("focus", ""), cfg.get("topics"))
-                for image_id, t in zip(chunk, ts, strict=True):
-                    for it in items_from_teacher(t, skills):
+                per_image: list[list[dict]] = [[] for _ in chunk]
+                if mode in ("auto", "both"):
+                    ts = _with_backoff(
+                        lambda ps: engine.teacher_generate_batch(
+                            ps, cfg.get("focus", ""), cfg.get("topics")
+                        ),
+                        paths_,
+                    )
+                    for j, t in enumerate(ts):
+                        per_image[j] += items_from_teacher(t, skills)
+                if fixed and any(fixed.values()):
+                    ts = _with_backoff(lambda ps: engine.teacher_fixed_batch(ps, fixed), paths_)
+                    for j, t in enumerate(ts):
+                        per_image[j] += items_from_fixed(t, fixed)
+                for image_id, its in zip(chunk, per_image, strict=True):
+                    seen: set[tuple[str, str]] = set()
+                    for it in its:
+                        key = (it["skill"], it["prompt"])
+                        if key in seen:
+                            continue
+                        seen.add(key)
                         ws.add_item(
                             image_id,
                             it["skill"],
@@ -462,8 +572,8 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             if job.get("cancel"):
                 job["state"] = "cancelled"
                 return
-            # student
-            items = ws.items(qid, "pending")
+            # student (only items without an answer: a resumed batch keeps what it had)
+            items = [it for it in ws.items(qid, "pending", ALL) if it["pred"] is None]
             by_prompt: dict[tuple[str, str], list[dict]] = {}
             for it in items:
                 by_prompt.setdefault((it["skill"], it["prompt"]), []).append(it)
@@ -480,8 +590,8 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                         job["done"] += len(chunk)
             except Exception as e:  # noqa: BLE001 - no student (weights missing): humans
                 job["student_error"] = f"{type(e).__name__}: {e}"  # review the teacher alone
-            # agreement, and the judge for the teacher's captions
-            items = ws.items(qid, "pending")
+            # agreement, and the judge for the teacher's captions (unjudged items only)
+            items = [it for it in ws.items(qid, "pending", ALL) if not it["verdict"]]
             caps = [it for it in items if it["skill"] == "caption"]
             job["phase"], job["total"], job["done"] = "judging", len(items), 0
             for it in items:
@@ -597,26 +707,31 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     def review_summary():
         return {
             **ws.review_summary(),
-            "batches": [{**q, "job": jobs.get(q["id"])} for q in ws.queues()],
+            "batches": [_batch(q) for q in ws.queues()],
             "sources": ws.sources(),
         }
 
     @app.get("/api/review/next-image")
-    def review_next_image(reviewer: str, after: str | None = None):
-        r = ws.claim_next_image(None, reviewer, after)
+    def review_next_image(reviewer: str, after: str | None = None, dataset_id: int | None = None):
+        r = ws.claim_next_image(None, reviewer, after, dataset_id)
         if r is None:
             return {}
         image, items = r
         return {"image": image, "items": items}
 
     @app.get("/api/review/images")
-    def review_images(status: str = "pending"):
-        """Images with items in ``status`` (pending | auto | reviewed), newest batch first."""
+    def review_images(status: str = "pending", dataset_id: int | None = None):
+        """Images with items in ``status`` (pending | auto | reviewed | all), newest batch
+        first; ``dataset_id`` narrows to one dataset. ``claimed_by`` names who holds it."""
         rows = ws.db.execute(
-            "select image_id, count(*) n, sum(status = 'pending') pending,"
-            " sum(verdict = 'fix' and status = 'pending') fix, max(spot) spot,"
-            " sum(status = 'auto') auto, max(queue_id) queue_id"
-            " from items group by image_id order by queue_id desc, min(id)"
+            "select items.image_id, count(*) n, sum(items.status = 'pending') pending,"
+            " sum(verdict = 'fix' and items.status = 'pending') fix, max(spot) spot,"
+            " sum(items.status = 'auto') auto, max(items.queue_id) queue_id,"
+            " max(case when claimed_at >= ? then claimed_by end) claimed_by"
+            " from items join queues on queues.id = items.queue_id"
+            " where (? is null or queues.dataset_id = ?)"
+            " group by items.image_id order by max(items.queue_id) desc, min(items.id)",
+            (time.time() - 600, dataset_id, dataset_id),
         ).fetchall()
         out = [dict(r) for r in rows]
         if status == "pending":
@@ -648,13 +763,193 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                 raise HTTPException(422, f"item {d.get('id')}: {e}") from e
         return out
 
+    # ------------------------------------------------------------------ datasets (GOALS §4)
+    store = DatasetStore(ws)
+
+    @app.get("/api/datasets")
+    def datasets():
+        return store.list()
+
+    @app.post("/api/datasets")
+    def dataset_create(body: DatasetIn):
+        try:
+            return store.create(body.name, body.config, body.note)
+        except Exception as e:  # noqa: BLE001 - duplicate / blank name
+            raise HTTPException(409, f"建不了：{e}") from e
+
+    @app.get("/api/datasets/{ds_id}")
+    def dataset_get(ds_id: int):
+        try:
+            d = store.get(ds_id)
+        except KeyError as e:
+            raise HTTPException(404) from e
+        d["batches"] = [_batch(q) for q in ws.queues() if q.get("dataset_id") == ds_id]
+        d["unlabelled"] = len(store.unlabelled_image_ids(ds_id))
+        return d
+
+    @app.post("/api/datasets/{ds_id}")
+    def dataset_update(ds_id: int, body: DatasetUpdateIn):
+        return store.update(ds_id, body.config, body.name)
+
+    @app.delete("/api/datasets/{ds_id}")
+    def dataset_delete(ds_id: int):
+        store.delete(ds_id)
+        return {"ok": True}
+
+    @app.get("/api/datasets/{ds_id}/images")
+    def dataset_images(ds_id: int, split: str | None = None):
+        return [ws.image(i) for i in store.image_ids(ds_id, split)]
+
+    @app.post("/api/datasets/{ds_id}/upload")
+    async def dataset_upload(ds_id: int, file: UploadFile):
+        data = await file.read()
+        try:
+            ids = store.add_bytes(ds_id, data, file.filename or "upload.jpg")
+        except KeyError as e:
+            raise HTTPException(404, "沒有這個資料集") from e
+        return {"added": len(ids), "image_ids": ids}
+
+    @app.post("/api/datasets/{ds_id}/folder")
+    def dataset_folder(ds_id: int, body: FolderIn):
+        d = Path(body.dir).expanduser()
+        if not d.is_dir():
+            raise HTTPException(404, f"{d} 不是目錄")
+        if "heldout" in str(d):
+            raise HTTPException(422, "held-out 的圖不能進資料集（GOALS §4）")
+        try:
+            ids = store.add_folder(ds_id, d, body.limit)
+        except KeyError as e:
+            raise HTTPException(404, "沒有這個資料集") from e
+        return {"added": len(ids), "image_ids": ids}
+
+    @app.post("/api/datasets/{ds_id}/label")
+    def dataset_label(ds_id: int, n_images: int | None = None, model: str = "base"):
+        """Run the teacher -> student -> compare chain on the dataset's unlabelled images,
+        following its config (auto questions and/or fixed prompts)."""
+        ds = store.get(ds_id)
+        ids = store.unlabelled_image_ids(ds_id)
+        if n_images:
+            ids = ids[:n_images]
+        if not ids:
+            raise HTTPException(409, "沒有還沒標的圖")
+        cfg = ds["config"]
+        qname = f"{ds['name']}-{time.strftime('%m%d-%H%M%S')}"
+        q = ws.create_queue(qname, "query", model, "autogen", Path(paths.JUDGE_MODEL).name)
+        store.attach_queue(q["id"], ds_id)
+        job_cfg = {
+            "image_ids": ids,
+            "skills": cfg.get("skills") or ["detect", "point", "query", "caption"],
+            "mode": cfg.get("mode", "auto"),
+            "fixed": cfg.get("fixed", ""),
+            "topics": cfg.get("topics") or [],
+            "focus": cfg.get("focus", ""),
+            "model": model,
+            "seed": 0,
+        }
+        ws.set_queue_mode(q["id"], "auto", job_cfg)
+        _start(q["id"], _autogen_queue, job_cfg)
+        return {**ws.queue(q["id"]), "job": jobs[q["id"]]}
+
+    @app.post("/api/datasets/{ds_id}/export")
+    def dataset_export(ds_id: int, images: bool = True):
+        return store.export(ds_id, paths.WORKSPACE / "export", images)
+
+    @app.get("/api/datasets/{ds_id}/download/{kind}")
+    def dataset_download(ds_id: int, kind: str):
+        ds = store.get(ds_id)
+        fn = f"{ds['name']}.jsonl" if kind == "jsonl" else f"{ds['name']}-images.zip"
+        p = paths.WORKSPACE / "export" / fn
+        if not p.exists():
+            raise HTTPException(404, "先按匯出")
+        return FileResponse(p, filename=p.name)
+
     @app.post("/api/train")
     def train_start(body: TrainIn):
-        """③ train on everything reviewed so far, then evaluate and gate."""
+        """③ train on the chosen datasets' train splits (or everything reviewed), then
+        evaluate on the held-out suites and each dataset's val split, then gate."""
+        from ..data import write_rows
+
+        name = body.name or default_name()
+        rows: list[dict] | None = None
+        vals: dict[str, Path] = {}
+        names: list[str] = []
+        if body.dataset_ids:
+            rows = []
+            for ds_id in body.dataset_ids:
+                ds = store.get(ds_id)
+                names.append(ds["name"])
+                rows += store.rows(ds_id, "train")
+                val_rows = store.rows(ds_id, "val")
+                if val_rows:
+                    vp = paths.WORKSPACE / "export" / f"val-{ds['name']}.jsonl"
+                    write_rows(vp, val_rows, ensure_ascii=False)
+                    vals[f"val-{ds['name']}"] = vp
         try:
-            return pipeline.start(body.name or default_name(), body.steps, body.lr, body.rank)
+            return pipeline.start(
+                name, body.steps, body.lr, body.rank, rows, vals, body.region_head, names
+            )
         except RuntimeError as e:
             raise HTTPException(409, str(e)) from e
+
+    @app.post("/api/train/{name}/cancel")
+    def train_cancel(name: str):
+        if not pipeline.cancel(name):
+            raise HTTPException(409, "沒有在跑")
+        return {"ok": True}
+
+    @app.delete("/api/train/{name}")
+    def train_delete(name: str):
+        try:
+            pipeline.delete(name)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e)) from e
+        return {"ok": True}
+
+    @app.get("/api/datasets/{ds_id}/grid")
+    def dataset_grid(ds_id: int):
+        """Every image of the dataset with its split and review counts (the thumbnail grid)."""
+        rows = ws.db.execute(
+            "select di.image_id, di.split, count(items.id) n,"
+            " sum(items.status = 'pending') pending,"
+            " sum(items.verdict = 'fix' and items.status = 'pending') fix,"
+            " sum(items.status = 'auto') auto"
+            " from dataset_images di"
+            " left join queues on queues.dataset_id = di.dataset_id"
+            " left join items on items.queue_id = queues.id and items.image_id = di.image_id"
+            " where di.dataset_id = ? group by di.image_id, di.split order by di.added_at",
+            (ds_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.post("/api/datasets/{ds_id}/items")
+    def dataset_item(ds_id: int, body: ItemIn):
+        """A confirmed item saved by hand (the playground's 存成資料集的題)."""
+        ds = store.get(ds_id)
+        qname = f"{ds['name']}-manual"
+        try:
+            q = ws.queue_by_name(qname)
+        except KeyError:
+            q = ws.create_queue(qname, "query", "base", "manual")
+            store.attach_queue(q["id"], ds_id)
+        store.add_image(ds_id, body.image_id)
+        item_id = ws.add_item(
+            body.image_id, body.skill, body.prompt, body.pred, body.pred_model, q["id"], "workbench"
+        )
+        try:
+            return ws.review(item_id, body.action, body.reviewer, body.label)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+
+    @app.get("/api/train/{name}/orin.zip")
+    def train_orin(name: str):
+        st = pipeline.status(name)
+        if st is None:
+            raise HTTPException(404)
+        try:
+            z = make_bundle(paths.RUNS / name, name, st)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+        return FileResponse(z, filename=z.name)
 
     @app.get("/api/train")
     def train_list():
@@ -680,12 +975,12 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
 
     @app.get("/api/queues")
     def queues():
-        return [{**q, "job": jobs.get(q["id"])} for q in ws.queues()]
+        return [_batch(q) for q in ws.queues()]
 
     @app.get("/api/queues/{qid}")
     def queue(qid: int):
         try:
-            return {**ws.queue(qid), "job": jobs.get(qid)}
+            return _batch(ws.queue(qid))
         except KeyError as e:
             raise HTTPException(404) from e
 

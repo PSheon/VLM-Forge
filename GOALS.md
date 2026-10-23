@@ -25,7 +25,7 @@ Data Core 匯出包、GCS、CI、`stage` 分支與 gate 儀式、PRO 6000 kestre
 | 推論與訓練底層 | `src/vlmforge/model/`：純 PyTorch 移植（vision／text／region／LoRA），GB300 可跑；base 在三套 held-out 的分數與 SyncVision 記錄的 SyncVLM 一致（detect 0.368／0.370） |
 | 部署目標 | **Orin AGX，用 Moondream 官方 Photon 跑 base + adapter**（kestrel 有 Jetson aarch64 kernel） |
 | adapter 格式 | 官方 `lora_state_dict` 版面（`dense.{i}.up_a/up_b/down_a/down_b`、`moe.{j}.*`，alpha/r 已折進 B），**只掛文字 MLP**，rank 8–32；**region head 預設不訓**（訓了就只能在 Forge 跑，是進階選項） |
-| 出題／比對模型 | Qwen3-VL-32B-Instruct（`model-cache/judge`），8 張一批 |
+| 出題／比對模型 | Qwen3-VL-32B-Instruct（`model-cache/judge`，載入需 ~70 GB），8 張一批；GPU 被佔住放不下時退到 Qwen3-VL-8B-Instruct（`model-cache/judge-8b`，~22 GB），UI 標明「出題模型：8B（小）」，重啟後記憶體夠就回 32B |
 | GPU | 與 SyncVision 共用 GB300：SyncVision 優先；Forge 訓練 ≤ 60 GB；一律 `numactl --membind=0` |
 
 ## 4. 資料集
@@ -46,7 +46,7 @@ Data Core 匯出包、GCS、CI、`stage` 分支與 gate 儀式、PRO 6000 kestre
 ## 6. 訓練
 
 - UI 一顆按鈕；只露名稱、步數、學習率。預設 r=16、alpha=32、lr 2e-4、步數依資料量（≈ 每張圖 2 步，100–1000）、batch 8、replay 0.5、region head 關。預設值由 Claude 依實驗調整，不逐項問。
-- 訓完自動在 held-out 與驗證集評估、和 base 比；一次只跑一個訓練。
+- 訓完自動在 held-out 與驗證集評估、和 base 比；過關＝**工廠 CCTV 考卷**每個 skill ≥ base − 1 點且至少一個進步（CrowdHuman／機器狗只當參考，不算進去）；一次只跑一個訓練。
 
 ## 7. 測試
 
@@ -56,7 +56,7 @@ Data Core 匯出包、GCS、CI、`stage` 分支與 gate 儀式、PRO 6000 kestre
 
 ## 8. 介面
 
-- 四步：**① 資料 → ② 檢查 → ③ 訓練 → ④ 測試**，每步一個畫面、一個主按鈕；首頁步驟列顯示各步進度。名詞只用「預標」「模型」「不一致（請你看）」「自動通過」「抽查」。
+- **從資料出發、三步**（Paul 2026-10-23）：**① 資料集 → ② 訓練 → ③ 測試**。資料集頁分四個分頁：圖片（加圖、標註與進度）、檢查（一次一題，固定在這個資料集；點縮圖格任一張直接進）、設定（AI 導師怎麼標）、匯出。和市面工具一致（Roboflow／Label Studio／Encord：標註與審核都在資料集／專案裡，訓練另起一段引用資料集）。每步一個畫面、一個主按鈕；步驟列顯示各步進度。名詞只用「預標」「模型」「不一致（請你看）」「自動通過」「抽查」。
 - 桌機 1440 為主、平板可用、不做手機；跟系統深淺色；繁中。
 - 改版先出 HTML 可點稿給 Paul 確認，再改程式。
 
@@ -68,6 +68,8 @@ Data Core 匯出包、GCS、CI、`stage` 分支與 gate 儀式、PRO 6000 kestre
 
 ## 10. 現況（2026-10-23）
 
-- 已有：模型移植與 base 分數；自動出題（兩階段 teacher、批次）；一次一題的檢查頁；UI 訓練管線（訓→評→比）；④ 分數表／看差異／單張試玩；圖池 hydranet 300、LOCO 200（Data Core T1）。
-- 進行中：依本文件改成「資料集」為中心的介面（先出稿）；Photon 相容的 adapter 預設；驗證集切分；Orin 匯出。
+- **2026-10-23 晚：①→③ 全程在 UI 跑通**——工廠-測試 120 張 → 2845 題（8B 出題）→ 檢查 → 訓練 ft-1023-1911 → 分數／看差異／試一張／Orin 包。2 張圖的 run 只證明流程，分數退步是預期。
+- 已有：模型移植與 base 分數；自動出題（兩階段 teacher、批次、8B 備案）；一次一題的檢查頁；訓練管線（訓→評→gate）；③ 分數卡／看差異／試一張／Orin 包（附本機 adapter loader）。
+- 標註批次的進度只在記憶體：server 重啟或取消會中斷，但出好的題都在；資料集頁會標「中斷」並給「接著跑」（只補沒出題的圖、沒作答的題、沒比對的題）。**跑標註時不要重啟 server。**
+- 下一步：Paul 看完 30–50 張再訓一次，看 CCTV query／detect 是否守住；query 答案被截斷（「There is 」）待查；Orin 實機驗證 `local_adapter.py`。
 - 待 Paul：NVR RTSP 連線資訊（工廠 CCTV 新畫面）。

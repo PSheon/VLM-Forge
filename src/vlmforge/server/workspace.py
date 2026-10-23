@@ -30,8 +30,10 @@ from PIL import Image
 
 CLAIM_MINUTES = 10
 SKILLS = ("detect", "point", "query", "caption")
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 STATUSES = ("pending", "auto", "approved", "corrected", "discarded")
 SPOT_FRAC, SPOT_MIN = 0.1, 20  # judge-accepted items a human still sees (per queue)
+ALL = 10**9  # ``items(limit=ALL)``: every row, for pipelines
 # columns added after the first schema; (table, column, type) applied with ALTER TABLE
 MIGRATIONS = (
     ("items", "judge", "text"),
@@ -271,9 +273,26 @@ class Workspace:
     def unjudged(self, queue_id: int) -> list[dict]:
         return [
             it
-            for it in self.items(queue_id, "pending")
+            for it in self.items(queue_id, "pending", ALL)
             if it["pred"] is not None and not it["verdict"]
         ]
+
+    def unfinished(self, queue_id: int, image_ids: list[str]) -> dict:
+        """What an interrupted autogen batch still owes: images with no questions yet,
+        pending items the student has not answered, pending items not yet compared. A
+        server restart loses the in-memory job; ``/api/queues/{id}/resume`` uses this."""
+        done = {
+            r[0]
+            for r in self.db.execute(
+                "select distinct image_id from items where queue_id = ?", (queue_id,)
+            )
+        }
+        pend = self.items(queue_id, "pending", ALL)
+        return {
+            "images": sum(i not in done for i in image_ids),
+            "unpredicted": sum(it["pred"] is None for it in pend),
+            "unjudged": sum(not it["verdict"] for it in pend),
+        }
 
     def triage(self, queue_id: int, seed: int = 0) -> dict:
         """After judging: accepted items leave the human queue (status ``auto``) except a
@@ -314,6 +333,8 @@ class Workspace:
         return it
 
     def items(self, queue_id: int, status: str | None = None, limit: int = 2000) -> list[dict]:
+        """Items of a queue (joined with the image row); pass ``limit=ALL`` from pipelines —
+        the default is for the UI, and a 2 286-item batch once lost its tail to it."""
         q = (
             "select items.*, images.path, images.width, images.height, images.source"
             " from items join images on images.id = items.image_id where queue_id = ?"
@@ -373,18 +394,26 @@ class Workspace:
             self.db.commit()
         return {"images": len(by_img), "clean": len(clean), "spot": len(spot), "auto": n_auto}
 
-    def claim_next_image(self, queue_id: int | None, reviewer: str, after_image: str | None = None):
-        """The next image with pending items (images holding a ``fix`` first; ``queue_id``
-        None = any batch); every pending item of it is claimed for the reviewer. Returns
-        (image, items) or None."""
+    def claim_next_image(
+        self,
+        queue_id: int | None,
+        reviewer: str,
+        after_image: str | None = None,
+        dataset_id: int | None = None,
+    ):
+        """The next image with pending items (images holding a ``fix`` first; ``queue_id`` /
+        ``dataset_id`` None = any); every pending item of it is claimed for the reviewer.
+        Returns (image, items) or None."""
         with self.lock:
             cutoff = time.time() - CLAIM_MINUTES * 60
             rows = self.db.execute(
-                "select image_id, max(verdict = 'fix') fix, min(id) first_id,"
+                "select items.image_id, max(verdict = 'fix') fix, min(items.id) first_id,"
                 " max(claimed_by is not null and claimed_by != ? and claimed_at >= ?) taken"
-                " from items where (? is null or queue_id = ?) and status = 'pending'"
-                " group by image_id order by fix desc, first_id",
-                (reviewer, cutoff, queue_id, queue_id),
+                " from items join queues on queues.id = items.queue_id"
+                " where (? is null or items.queue_id = ?) and (? is null or queues.dataset_id = ?)"
+                " and items.status = 'pending'"
+                " group by items.image_id order by fix desc, first_id",
+                (reviewer, cutoff, queue_id, queue_id, dataset_id, dataset_id),
             ).fetchall()
             pick = None
             seen_after = after_image is None
@@ -429,6 +458,13 @@ class Workspace:
         ).fetchone()
         out = dict(r)
         out["trainable"] = (out["auto"] or 0) + (out["reviewed"] or 0)
+        try:  # images that belong to a dataset count even before they have items
+            out["images"] = self.db.execute(
+                "select count(*) from (select image_id from dataset_images"
+                " union select image_id from items)"
+            ).fetchone()[0]
+        except sqlite3.OperationalError:  # table not created yet (no DatasetStore)
+            pass
         return out
 
     def claim_next(self, queue_id: int, reviewer: str, after: int | None = None) -> dict | None:

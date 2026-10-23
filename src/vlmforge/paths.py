@@ -14,8 +14,12 @@ MODEL_CACHE = Path(os.environ.get("VLMFORGE_MODEL_CACHE", ROOT / "model-cache" /
 WEIGHTS = MODEL_CACHE / "weights" / "model.safetensors"
 TOKENIZER = MODEL_CACHE / "tokenizer"
 
-# the judge (GOALS §6): a symlink to the local Qwen3-VL-32B-Instruct directory
+# the judge (GOALS §3): ``judge`` → Qwen3-VL-32B-Instruct (a symlink), ``judge-8b`` →
+# Qwen3-VL-8B-Instruct, the fallback when the shared GPU cannot fit the 32B. The GB figures
+# are what each needs free before loading (weights + batch-of-8 activations).
 JUDGE_MODEL = Path(os.environ.get("VLMFORGE_JUDGE_MODEL", ROOT / "model-cache" / "judge"))
+JUDGE_MODEL_SMALL = Path(os.environ.get("VLMFORGE_JUDGE_SMALL", ROOT / "model-cache" / "judge-8b"))
+JUDGE_GB, JUDGE_SMALL_GB = 70.0, 22.0
 
 RUNS = ROOT / "runs"
 BASELINES = RUNS / "baselines"

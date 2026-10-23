@@ -27,7 +27,8 @@ class Engine:
         self.base_head = None
         self.current = "base"
         self.adapters: dict[str, dict] = {}
-        self.judge = None  # the Qwen3-VL judge, loaded on first use (GOALS §6)
+        self.judge = None  # the Qwen3-VL judge, loaded on first use (GOALS §3)
+        self.judge_name: str | None = None  # "Qwen3-VL-32B" or the "Qwen3-VL-8B" fallback
         self.q: queue.Queue = queue.Queue()
         self.loaded_at: float | None = None
         self.busy = False
@@ -45,8 +46,11 @@ class Engine:
 
         if not Path(self.weights).exists():
             raise FileNotFoundError(
-                f"model weights not found: {self.weights} (copy them from the PRO 6000, GOALS §3)"
+                f"model weights not found: {self.weights}"
+                " (hf download moondream/moondream3.1-9B-A2B model.safetensors"
+                " --local-dir model-cache/moondream31/weights)"
             )
+        self._need(24, "Moondream")
         t0 = time.time()
         self.model = Moondream(self.weights, self.tokenizer, batch_size=self.batch_size)
         self.base_head = {k: v.clone() for k, v in self.model.region.head_state_dict().items()}
@@ -54,14 +58,63 @@ class Engine:
         self.loaded_at = time.time()
         print(f"engine: model loaded in {self.loaded_at - t0:.0f}s", flush=True)
 
+    @staticmethod
+    def gpu_free_gb() -> float | None:
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                return None
+            free, _ = torch.cuda.mem_get_info()
+            return free / 2**30
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _need(self, gb: float, what: str) -> None:
+        """The GB300 is shared and SyncVision has priority (GOALS §3): fail with a readable
+        message instead of a CUDA OOM when another job holds the memory."""
+        free = self.gpu_free_gb()
+        if free is not None and free < gb:
+            raise RuntimeError(
+                f"GPU 記憶體不足：{what}需要約 {gb:.0f} GB，現在只剩 {free:.0f} GB"
+                "（別的訓練正在用）。等它結束再試。"
+            )
+
+    @staticmethod
+    def judge_dirs() -> list[tuple[Path, str, float]]:
+        """Downloaded judges, best first: ``(dir, label, GB needed)``."""
+        out = []
+        if Path(paths.JUDGE_MODEL).exists():
+            out.append((Path(paths.JUDGE_MODEL), "Qwen3-VL-32B", paths.JUDGE_GB))
+        if Path(paths.JUDGE_MODEL_SMALL).exists():
+            out.append((Path(paths.JUDGE_MODEL_SMALL), "Qwen3-VL-8B", paths.JUDGE_SMALL_GB))
+        return out
+
+    def judge_choice(self) -> tuple[Path, str, float] | None:
+        """The best judge that fits in the free GPU memory right now (GOALS §3: the GB300 is
+        shared; the 32B when it fits, else the 8B), or None when nothing fits."""
+        free = self.gpu_free_gb()
+        for d, label, gb in self.judge_dirs():
+            if free is None or free >= gb:
+                return d, label, gb
+        return None
+
     def _load_judge(self):
         from ..judge import Judge
 
-        if not Path(paths.JUDGE_MODEL).exists():
-            raise FileNotFoundError(f"judge model not found: {paths.JUDGE_MODEL}")
+        dirs = self.judge_dirs()
+        if not dirs:
+            raise FileNotFoundError(
+                f"judge model not found: {paths.JUDGE_MODEL} (or {paths.JUDGE_MODEL_SMALL})"
+            )
+        choice = self.judge_choice()
+        if choice is None:
+            self._need(min(gb for _, _, gb in dirs), f"出題模型（{dirs[-1][1]}）")
+        d, label, _ = choice  # type: ignore[misc]
         t0 = time.time()
-        self.judge = Judge(paths.JUDGE_MODEL)
-        print(f"engine: judge loaded in {time.time() - t0:.0f}s", flush=True)
+        self.judge = Judge(d, name=label)
+        self.judge_name = label
+        print(f"engine: judge {label} loaded in {time.time() - t0:.0f}s", flush=True)
 
     def teacher_generate(self, image_path: str, focus: str = "", topics=None) -> dict:
         """Questions, answers and boxes for one image from the judge model (autogen)."""
@@ -69,6 +122,9 @@ class Engine:
 
     def teacher_generate_batch(self, image_paths: list[str], focus: str = "", topics=None):
         return self.submit(lambda j: j.generate_batch(image_paths, focus, topics), "judge").result()
+
+    def teacher_fixed_batch(self, image_paths: list[str], fixed: dict) -> list[dict]:
+        return self.submit(lambda j: j.fixed_batch(image_paths, fixed), "judge").result()
 
     def judge_items(self, items: list[dict]) -> list[dict]:
         """Verdicts for ``items`` (``path``, ``skill``, ``prompt``, ``pred``), on the worker."""
@@ -123,10 +179,14 @@ class Engine:
         self.q.put((fn, model, fut))
         return fut
 
+    def clear_error(self) -> None:
+        self.error = None
+
     def pending(self) -> int:
         return self.q.qsize()
 
     def status(self) -> dict:
+        dirs = self.judge_dirs()
         mem = None
         try:
             import torch
@@ -140,8 +200,14 @@ class Engine:
             "weights": str(self.weights),
             "weights_ok": Path(self.weights).exists(),
             "judge": str(paths.JUDGE_MODEL),
-            "judge_ok": Path(paths.JUDGE_MODEL).exists(),
+            "judge_ok": bool(dirs),
             "judge_loaded": self.judge is not None,
+            "judge_name": self.judge_name,
+            "judge_small_ok": any(label == "Qwen3-VL-8B" for _, label, _ in dirs),
+            "judge_need_gb": min((gb for _, _, gb in dirs), default=paths.JUDGE_GB),
+            "gpu_free_gb": (
+                round(self.gpu_free_gb(), 1) if self.gpu_free_gb() is not None else None
+            ),
             "current": self.current,
             "adapters_loaded": sorted(self.adapters),
             "pending": self.pending(),
