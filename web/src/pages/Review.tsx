@@ -97,7 +97,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       if (typing) { if (e.key === "Escape") t.blur(); if (e.key === "Enter" && !e.shiftKey && t.tagName === "TEXTAREA") { e.preventDefault(); t.blur(); accept(); } return; }
       if (!review || pendingJump) return;
       if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); confirmRest(); }
-      else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); accept(); }
+      else if (e.key === "Enter") { e.preventDefault(); accept(); }  // Space is the canvas pan key
       else if (e.key === "d" || e.key === "D") discard();
       else if (e.key === "1" && it?.teacher) edit(structuredClone(it.teacher), "改用預標");
       else if (e.key === "2" && it?.pred) edit(structuredClone(it.pred), "改用模型答案");
