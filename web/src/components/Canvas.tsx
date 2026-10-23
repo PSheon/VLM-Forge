@@ -184,7 +184,13 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
     else if (tg.classList.contains("bx") && i !== null) { setSel(i); setDrag({ kind: "move", i, dx: x - boxes[i][0], dy: y - boxes[i][1], orig: boxes[i] }); }
     else if (tg.classList.contains("pt") && i !== null) { setSel(i); setDrag({ kind: "point", i }); }
     else if (skill === "detect") { setSel(null); setDrag({ kind: "new", x0: x, y0: y, x1: x, y1: y }); }
-    else { onChange!({ points: [...points, [+x.toFixed(4), +y.toFixed(4)]] }, "加了一點"); setSel(points.length); }
+    else {
+      // inside a pre-label box that has no point yet: snap to its centre (Alt = exactly here)
+      const b = e.altKey ? undefined : altBoxes.find((bb) => inBox([x, y], bb) && !points.some((q) => inBox(q, bb)));
+      const p = b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [x, y];
+      onChange!({ points: [...points, [+p[0].toFixed(4), +p[1].toFixed(4)]] }, b ? "加了一點（吸到預標框中心，Alt 可放原位）" : "加了一點");
+      setSel(points.length);
+    }
   };
   const move = (e: React.PointerEvent) => {
     if (!drag) return;

@@ -551,11 +551,19 @@ class Workspace:
         return self.item(item_id)
 
     def reopen(self, item_id: int) -> dict:
+        """Back to pending, as triage left it: an agreed item gets its auto label back (the
+        spot-check sample carries one), any other item has none."""
+        from ..autogen import auto_label
+
+        it = self.item(item_id)
+        lab = None
+        if it and it.get("verdict") == "accept" and it.get("teacher") is not None:
+            lab = json.dumps(auto_label(it["skill"], it["pred"], it["teacher"]), ensure_ascii=False)
         with self.lock:
             self.db.execute(
-                "update items set status = 'pending', label = null, reviewer = null,"
+                "update items set status = 'pending', label = ?, reviewer = null,"
                 " reviewed_at = null where id = ?",
-                (item_id,),
+                (lab, item_id),
             )
             self.db.commit()
         return self.item(item_id)

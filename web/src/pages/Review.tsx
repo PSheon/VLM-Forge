@@ -45,6 +45,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     const f = order.findIndex(wanted);
     const first = Math.max(0, f >= 0 ? f : order.findIndex((x) => x.status === "pending"));
     setReview({ ...r, items: order }); setIdx(first); setLabel(initial(order[first] ?? order[0])); setDirty(false); setMsg("");
+    return order;
   }, [spotOnly, wanted]);
   const nextImage = useCallback(async (after?: string) => {
     started.current = true;
@@ -83,7 +84,9 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     try {
       const saved = await api.review(it.id, changed ? "correct" : "approve", reviewer, final);
       const done: Item[] = [{ ...it, ...saved }];
+      record([it.id], it.image_id);
       if (pair && syncPoint) {
+        undo.current[0].ids.push(pair.id);
         const pts = (final.boxes ?? []).map((b) => [+((b[0] + b[2]) / 2).toFixed(4), +((b[1] + b[3]) / 2).toFixed(4)]);
         const sp = await api.review(pair.id, "correct", reviewer, { points: pts });
         done.push({ ...pair, ...sp });
@@ -106,9 +109,30 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     const b = [...(it.label?.boxes ?? it.pred?.boxes ?? []), ...(it.teacher?.boxes ?? []), ...(it.label?.points ?? it.pred?.points ?? []).map(pb), ...(it.teacher?.points ?? []).map(pb)];
     return b.length ? b : null;
   }, [it?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Ctrl+Z: what was saved last (any image), most recent first; and the pace of saves
+  const undo = useRef<{ ids: number[]; image: string }[]>([]);
+  const saves = useRef<number[]>([]);
+  const record = (ids: number[], image: string) => {
+    undo.current = [{ ids, image }, ...undo.current].slice(0, 50);
+    const t = Date.now();
+    for (let i = 0; i < ids.length; i++) saves.current.push(t);
+    saves.current = saves.current.slice(-40);
+  };
+  const reopenLast = async () => {
+    const last = undo.current.shift();
+    if (!last) { say("沒有可以重開的題", "warn"); return; }
+    try {
+      await Promise.all(last.ids.map((id) => api.reopen(id)));
+      const order = open(await api.reviewImage(last.image));
+      const j = order.findIndex((x) => x.id === last.ids[0]);
+      if (j >= 0) { setIdx(j); setLabel(initial(order[j])); }
+      say(last.ids.length > 1 ? `重開了 ${last.ids.length} 題` : "重開了上一題", "warn");
+      refresh();
+    } catch (e) { say(String(e), "bad"); }
+  };
   const discard = useCallback(async () => {
     if (!it) return;
-    try { const saved = await api.review(it.id, "discard", reviewer, null); say("已丟棄", "warn"); advance([{ ...it, ...saved }]); } catch (e) { say(String(e), "bad"); }
+    try { const saved = await api.review(it.id, "discard", reviewer, null); record([it.id], it.image_id); say("已丟棄", "warn"); advance([{ ...it, ...saved }]); } catch (e) { say(String(e), "bad"); }
   }, [it, reviewer]); // eslint-disable-line react-hooks/exhaustive-deps
   const confirmRest = useCallback(async () => {
     if (!review) return;
@@ -116,6 +140,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     const ids = rest.map((r) => r.id);
     try {
       await api.submitImage(reviewer, rest);
+      record(ids, review.image.id);
       say(`這張 ${rest.length} 題全部存了 ✓`, "ok", { action: { label: "復原", run: async () => { await Promise.all(ids.map((id) => api.reopen(id))); say("已復原，這張回到待看", "warn"); refresh(); open(await api.reviewImage(review.image.id)); } } });
       refresh(); nextImage(review.image.id);
     } catch (e) { say(String(e), "bad"); }
@@ -144,6 +169,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
       if (typing) { if (e.key === "Escape") t.blur(); if (e.key === "Enter" && !e.shiftKey && (t.tagName === "TEXTAREA" || t.classList.contains("count"))) { e.preventDefault(); t.blur(); accept(); } return; }
       if (!review || pendingJump) return;
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) { e.preventDefault(); reopenLast(); return; }
       if (!e.metaKey && !e.ctrlKey) { setPressed(e.key.length === 1 ? e.key.toUpperCase() : e.key); window.setTimeout(() => setPressed(""), 260); }
       if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); confirmRest(); }
       else if (e.key === "Enter") { e.preventDefault(); accept(); }  // Space is the canvas pan key
@@ -184,7 +210,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     <div className="rv">
       <div className="page">
         <div className="col" style={{ minWidth: 0 }}>
-          {header?.(<><Pill kind={pendingLeft ? "warn" : "ok"}>這張還有 {pendingLeft} 題</Pill><span className="hint muted">待看 {sum?.images_pending ?? 0} 張 · {review.image.path.split("/").slice(-1)[0]}</span></>)}
+          {header?.(<><Pill kind={pendingLeft ? "warn" : "ok"}>這張還有 {pendingLeft} 題</Pill><span className="hint muted">待看 {sum?.images_pending ?? 0} 張{pace(saves.current, spotOnly ? sum?.spot?.pending : sum?.pending)} · {review.image.path.split("/").slice(-1)[0]}</span></>)}
           <Fade k={it.id} y={4}>
             <div className={`q ${it.verdict === "fix" ? "q-fix" : it.verdict === "accept" ? "q-acc" : ""}`}>
               <div className="row" style={{ gap: 12 }}>
@@ -271,6 +297,15 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
 function KeyBar({ keys, pressed }: { keys: [string, string][]; pressed: string }) {
   const on = (k: string) => pressed && (k === pressed || k.split("–").includes(pressed) || (k === "←→" && (pressed === "ArrowLeft" || pressed === "ArrowRight")) || (k === "↑↓" && (pressed === "ArrowUp" || pressed === "ArrowDown")) || (k === "0–9" && /^[0-9]$/.test(pressed)) || (k === "Del" && (pressed === "Delete" || pressed === "Backspace")));
   return <div className="keybar">{keys.map(([k, l]) => <span key={k}><kbd className={on(k) ? "on" : ""}>{k}</kbd> {l}</span>)}</div>;
+}
+
+/** " · 每題 6 秒 · 剩約 2.4 小時" from the recent save times, once there are enough of them. */
+function pace(times: number[], left?: number): string {
+  const gaps = times.slice(1).map((t, i) => (t - times[i]) / 1000).filter((g) => g < 120); // longer = a break
+  if (gaps.length < 5 || !left) return "";
+  const sec = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  const min = (sec * left) / 60;
+  return ` · 每題 ${Math.max(1, Math.round(sec))} 秒 · 剩約 ${min < 90 ? `${Math.round(min)} 分` : `${(min / 60).toFixed(1)} 小時`}`;
 }
 
 const statusLabel: Record<Item["status"], string> = { pending: "待看", auto: "自動通過", approved: "已確認", corrected: "已修正", discarded: "丟棄" };

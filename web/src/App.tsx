@@ -2,9 +2,9 @@
 // missing, and the per-page key help. Data (images, labelling, review, export) lives inside
 // a dataset; training and testing are the next two steps.
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { api, nameStore, type Batch, type Status, type Summary } from "./api";
-import { HelpOverlay, NameDialog, Pill, ToastProvider, useToast } from "./components/ui";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { api, nameStore, type Batch, type Run, type Status, type Summary } from "./api";
+import { HelpOverlay, NameDialog, Pill, ToastProvider, notify, useToast } from "./components/ui";
 import { Fade, MotionRoot } from "./components/motion";
 import Datasets from "./pages/Datasets";
 import Train from "./pages/Train";
@@ -18,7 +18,7 @@ const STEPS = [
 export type Step = (typeof STEPS)[number][0];
 
 const HELP: Record<Step, [string, string][]> = {
-  datasets: [["拖曳照片到虛線區", "加入資料集"], ["點縮圖", "進檢查看那張"], ["Enter", "檢查：存這題，到下一題"], ["Shift+Enter", "這張剩下的全照畫面存"], ["D", "丟棄這題"], ["Y / N", "是非題：yes / no（直接存）"], ["0–9 · ↑↓", "數量題：填數字 / 加減"], ["1 / 2", "用預標 / 用模型的答案"], ["3", "框／點題：補上預標有、目前沒有的"], ["P", "detect 題：存的時候同時存同物件的 point（框中心）開／關"], ["Backspace", "刪最後一個框／點"], ["E", "改答案（文字題）"], ["Z", "還原這題"], ["← / →", "上一題 / 下一題"], ["S", "跳過這張"], ["G", "所有圖"], ["F", "回到全圖"], ["H（按住）", "看原圖"], ["拖曳 / 拖角 / 點框", "detect：畫框、縮放、選取（預標框被蓋到會變綠 ✓）"], ["點一下 / 拖點", "point：加點、移動（紅點＝不在任何預標框裡）"], ["Tab", "選下一個框/點"], ["方向鍵（選取時）", "微移 1px，Shift 10px"], ["Delete", "刪框/點"], ["滾輪 · Space／中鍵／右鍵拖曳", "縮放 · 移動畫面"]],
+  datasets: [["拖曳照片到虛線區", "加入資料集"], ["點縮圖", "進檢查看那張"], ["Enter", "檢查：存這題，到下一題"], ["Shift+Enter", "這張剩下的全照畫面存"], ["D", "丟棄這題"], ["Y / N", "是非題：yes / no（直接存）"], ["0–9 · ↑↓", "數量題：填數字 / 加減"], ["1 / 2", "用預標 / 用模型的答案"], ["3", "框／點題：補上預標有、目前沒有的"], ["P", "detect 題：存的時候同時存同物件的 point（框中心）開／關"], ["Backspace", "刪最後一個框／點"], ["E", "改答案（文字題）"], ["Z", "還原這題（還沒存的改動）"], ["Ctrl+Z", "重開上一題（已經存了也可以）"], ["← / →", "上一題 / 下一題"], ["S", "跳過這張"], ["G", "所有圖"], ["F", "回到全圖"], ["H（按住）", "看原圖"], ["拖曳 / 拖角 / 點框", "detect：畫框、縮放、選取（預標框被蓋到會變綠 ✓）"], ["點一下 / 拖點", "point：加點、移動；點在預標框裡會吸到框中心，按住 Alt 放在原位（紅點＝不在任何預標框裡）"], ["Tab", "選下一個框/點"], ["方向鍵（選取時）", "微移 1px，Shift 10px"], ["Delete", "刪框/點"], ["滾輪 · Space／中鍵／右鍵拖曳", "縮放 · 移動畫面"]],
   train: [["Enter（欄位內）", "開始訓練"], ["?", "說明"]],
   test: [["← / →（看差異）", "上一題 / 下一題"], ["?", "說明"]],
 };
@@ -47,10 +47,33 @@ function Shell() {
   const [guard, setGuardState] = useState<(() => boolean) | null>(null); // review's unsaved-changes check
   const setGuard = useCallback((g: (() => boolean) | null) => setGuardState(() => g), []);
   const { say } = useToast();
+  const [runs, setRuns] = useState<Run[]>([]);
   const refresh = useCallback(() => {
     api.status().then((s) => { setStatus(s); setDown(false); }).catch(() => setDown(true));
     api.summary().then(setSum).catch(() => undefined);
+    api.runs().then((r) => setRuns(r.runs)).catch(() => undefined);
   }, []);
+  // long jobs: progress in the tab title, a notification (and a toast) when one finishes
+  const liveBatch = sum?.batches.find((b) => b.job?.state === "running");
+  const liveRun = runs.find((r) => r.state === "running");
+  useEffect(() => {
+    const t = liveBatch ? `標註 ${liveBatch.job?.done ?? 0}/${liveBatch.job?.total ?? 0}` : liveRun ? (liveRun.phase === "training" ? `訓練 ${liveRun.last?.step ?? 0}/${liveRun.steps}` : "評估中") : "";
+    document.title = t ? `(${t}) VLM-Forge` : "VLM-Forge";
+  }, [liveBatch, liveRun]);
+  const seen = useRef<Record<string, string>>({});
+  useEffect(() => {
+    const now: Record<string, string> = {};
+    for (const b of sum?.batches ?? []) if (b.job) now[`b${b.id}`] = b.job.state;
+    for (const r of runs) now[`r${r.name}`] = r.state;
+    for (const [k, v] of Object.entries(now)) {
+      if (seen.current[k] !== "running" || v === "running") continue;
+      const what = k.startsWith("b") ? `標註 ${sum?.batches.find((b) => `b${b.id}` === k)?.name ?? ""}` : `訓練 ${k.slice(1)}`;
+      const text = v === "done" ? `${what} 完成` : v === "error" ? `${what} 失敗` : `${what} 停了`;
+      say(text, v === "done" ? "ok" : "bad", { sticky: v !== "done" });
+      notify("VLM-Forge", text);
+    }
+    seen.current = now;
+  }, [sum, runs]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { refresh(); const t = setInterval(refresh, 5000); return () => clearInterval(t); }, [refresh]);
   useEffect(() => { if (location.hash.slice(1).split("?")[0] !== step) location.hash = step; }, [step]);
   useEffect(() => {

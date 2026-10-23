@@ -330,3 +330,9 @@ def test_retriage_keeps_the_spot_sample(tmp_path, monkeypatch):
     assert image["id"] == im["id"]
     image, _ = ws.claim_next_image(q["id"], "Q")
     assert image["id"] == im2["id"]  # without the filter the disagreement comes first
+    # Ctrl+Z on a saved spot-check question: back to pending with its auto label, not empty
+    sid = next(iter(sampled))
+    auto = ws.item(sid)["label"]
+    ws.review(sid, "correct", "P", {"boxes": []})
+    back = ws.reopen(sid)
+    assert back["status"] == "pending" and back["label"] == auto and back["reviewer"] is None
