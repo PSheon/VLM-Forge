@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, fmt, fmtDelta, phaseLabel, suiteLabel, type Dataset, type Run, type Status } from "../api";
-import { Bar, ConfirmDialog, PageHead, Pill, useToast } from "../components/ui";
+import { ActionsHead, Bar, ConfirmDialog, PageHead, Pill, useToast } from "../components/ui";
 import { Fade, Item, Pop, Stagger } from "../components/motion";
 import type { Step } from "../App";
 
@@ -101,6 +101,8 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
       </div>
 
       <div className="actions">
+
+        <ActionsHead />
         <button className="primary big" onClick={start} disabled={blockers.length > 0}>{running ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : blockers.length ? "還不能訓練" : `開始訓練 ${nameFinal}`}</button>
         {blockers.map((b) => <Pop key={b} className="bad hint">✗ {b}</Pop>)}
         <div className="panel col summary">

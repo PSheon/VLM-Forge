@@ -60,6 +60,18 @@ export function PageHead({ back, title, children }: { back?: { label: string; on
   return <div className="row page-head">{back && <button className="ghost back" onClick={back.onClick} title="Esc">{back.label}</button>}<h2>{title}</h2>{children}</div>;
 }
 
+/** The first row of every action column, level with the page's title row: page tools on the
+ *  left (e.g. 所有圖), the shortcut help on the right. Keeps the primary button aligned with the
+ *  first line of content under the title. */
+export function ActionsHead({ children }: { children?: ReactNode }) {
+  return (
+    <div className="actions-head">
+      <span className="row">{children}</span>
+      <button className="ghost help" onClick={() => window.dispatchEvent(new Event("forge:help"))} title="快捷鍵（?）" aria-label="快捷鍵"><kbd>?</kbd> 快捷鍵</button>
+    </div>
+  );
+}
+
 /** A collapsible block in the action column (settings, export): one line with a summary. */
 export function Section({ title, summary, open, onToggle, dirty, children }: { title: string; summary: string; open: boolean; onToggle: () => void; dirty?: boolean; children: ReactNode }) {
   return (

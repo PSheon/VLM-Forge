@@ -7,7 +7,7 @@ import { api, defaultPrompt, emptyLabel, fmt, fmtDelta, phaseLabel, skillLabel, 
 import Canvas, { type View } from "../components/Canvas";
 import ImagePicker from "../components/ImagePicker";
 import TextDiff from "../components/TextDiff";
-import { PageHead, Pill, Section, useEscBack, useToast } from "../components/ui";
+import { ActionsHead, PageHead, Pill, Section, useEscBack, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
 import type { Step } from "../App";
 
@@ -32,7 +32,7 @@ export default function Test({ models, reviewer, go }: { models: Model[]; review
       {view === "scores" && data && <Scores header={head("測試", "base＝原本的 Moondream；每個訓練好的模型都和它比")} data={data} done={done} running={running} suites={suites} go={go} onDiff={(run, suite) => { setDiff({ run, suite }); setView("diff"); }} onPlay={() => setView("play")} />}
       {view === "diff" && <Diff header={head("看差異", "逐題比 base 和新模型")} runs={done} suites={suites} initial={diff} />}
       {view === "play" && <Play header={head("試一張", "任何一張圖，問 base 和新模型")} models={models} reviewer={reviewer} />}
-      {view === "scores" && !data && <div className="page"><div className="col">{head("測試", "")}<div className="empty"><i className="spin" />載入中…</div></div><div className="actions" /></div>}
+      {view === "scores" && !data && <div className="page"><div className="col">{head("測試", "")}<div className="empty"><i className="spin" />載入中…</div></div><div className="actions"><ActionsHead /></div></div>}
     </Fade>
   );
 }
@@ -77,6 +77,7 @@ function Scores({ header, data, done, running, suites, go, onDiff, onPlay }: { h
       <div className="muted hint">分數 0–1，越高越好：Detect／Point＝找對的比例（F1），Query／Caption＝答對的比例；綠紅小字＝比 base 高／低幾個百分點。考卷的圖從不進訓練。v1 目標：工廠 CCTV 的 Detect 和 Query 都不低於 base。</div>
     </div>
     <div className="actions">
+      <ActionsHead />
       {best ? <button className="primary big" onClick={() => onDiff(best.name, "heldout-cctv")}>看 {best.name} 的差異 →</button> : <button className="primary big" onClick={() => go("train")} disabled={!!running}>{running ? `${running.name} 訓練中…` : "去訓練 →"}</button>}
       <Pop show={!done.length} className="hint muted">{running ? `第 ${running.last?.step ?? 0}/${running.steps} 步；訓完自動在每張考卷評分，這裡會多一欄。` : "左邊是 base 的起點分數；訓一個模型後會多一欄。"}</Pop>
       {best?.gate && <div className={`hint ${best.gate.passed ? "ok" : "bad"}`}>{best.name}：{best.gate.passed ? "比 base 好（工廠 CCTV）" : "沒有比 base 好（工廠 CCTV）"}</div>}
@@ -144,6 +145,7 @@ function Diff({ header, runs, suites, initial }: { header: ReactNode; runs: Run[
       )}
     </div>
     <div className="actions">
+      <ActionsHead />
       <div className="row"><button onClick={() => setCur((c) => Math.max(0, c - 1))} disabled={cur <= 0} title="←">←</button><button className="primary big" onClick={() => setCur((c) => Math.min(shown.length - 1, c + 1))} disabled={!shown.length || cur >= shown.length - 1}>下一題 → <kbd>→</kbd></button></div>
       {pairs && <div className="list" style={{ maxHeight: "calc(100vh - 220px)" }}>{shown.map((q, i) => <div key={i} className={`it${i === cur ? " cur" : ""}`} onClick={() => setCur(i)}>{i + 1}. {q.row.skill} {q.row.object ?? q.row.question} <span className={better(q) ? "ok" : "bad"}>{score(q.base)} → {score(q.adapter)}</span></div>)}</div>}
       <div className="muted hint">框題＝對/多/漏 的數量，文字題＝✓/✗；綠＝新模型比 base 好。</div>
@@ -221,6 +223,7 @@ function Play({ header, models, reviewer }: { header: ReactNode; models: Model[]
     </div>
     </div>
       <div className="actions">
+        <ActionsHead />
         <button className="primary big" onClick={run} disabled={!image || busy}>{busy ? "執行中…" : !image ? "先選一張圖" : `執行：${skillLabel[skill]} ${short(prompt)} ⏎`}</button>
         <div className="tabs">{SKILLS.map((s) => <button key={s} className={s === skill ? "cur" : ""} onClick={() => pick(s, defaultPrompt(s))}>{skillLabel[s]}</button>)}</div>
         <label className="f">{skill === "query" ? "問題" : skill === "caption" ? "長度（short / normal / long）" : "找什麼"}<input value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && run()} /></label>
