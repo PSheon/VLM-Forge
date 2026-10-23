@@ -758,7 +758,10 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     @app.post("/api/datasets/{ds_id}/upload")
     async def dataset_upload(ds_id: int, file: UploadFile):
         data = await file.read()
-        ids = store.add_bytes(ds_id, data, file.filename or "upload.jpg")
+        try:
+            ids = store.add_bytes(ds_id, data, file.filename or "upload.jpg")
+        except KeyError as e:
+            raise HTTPException(404, "沒有這個資料集") from e
         return {"added": len(ids), "image_ids": ids}
 
     @app.post("/api/datasets/{ds_id}/folder")
@@ -768,7 +771,10 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             raise HTTPException(404, f"{d} 不是目錄")
         if "heldout" in str(d):
             raise HTTPException(422, "held-out 的圖不能進資料集（GOALS §4）")
-        ids = store.add_folder(ds_id, d, body.limit)
+        try:
+            ids = store.add_folder(ds_id, d, body.limit)
+        except KeyError as e:
+            raise HTTPException(404, "沒有這個資料集") from e
         return {"added": len(ids), "image_ids": ids}
 
     @app.post("/api/datasets/{ds_id}/label")

@@ -128,7 +128,11 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const doExport = async () => { setBusy(true); try { const r = await api.exportDataset(d.id); setExp(r); say(`匯出 ${r.rows} 列`); } catch (e) { say(String(e), "bad"); } finally { setBusy(false); } };
   const doRename = async () => { try { await api.updateDataset(d.id, { name: newName.trim() }); setRename(false); say("改好了"); reload(); } catch (e) { say(String(e), "bad"); } };
   const doDelete = async () => { await api.deleteDataset(d.id); say(`刪了 ${d.name}`, "warn"); setAskDelete(false); onDeleted(); };
-  const labelText = !judgeOk ? "出題模型缺，不能標" : gpuBusy ? "排隊中…（GPU 忙）" : unlabelled === 0 ? "沒有新圖" : `標註新加的 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張`;
+  const freeGb = status?.engine.gpu_free_gb ?? null;
+  const judgeLoaded = status?.engine.judge_loaded ?? false;
+  const lowMem = freeGb !== null && !judgeLoaded && freeGb < 70;
+  const labelText = !judgeOk ? "出題模型缺，不能標" : gpuBusy ? "排隊中…（GPU 忙）" : lowMem ? `GPU 只剩 ${freeGb!.toFixed(0)} GB，等別的訓練結束` : unlabelled === 0 ? "沒有新圖" : `標註新加的 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張`;
+  const total = (full ?? d).images;
   const skippedNote = batch?.job?.student_error ? `模型沒作答（${batch.job.student_error}），這批全部交給你看` : null;
   const [pillText, pillKind] = statusPill(full ?? d);
   const tabs: [Tab, string][] = [["images", `圖片 ${full?.images ?? d.images}`], ["review", `檢查${(full ?? d).images_pending ? ` ${(full ?? d).images_pending}` : ""}`], ["settings", "設定"], ["export", "匯出"]];
@@ -137,7 +141,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
     <div className="col">
       <div className="row">
         <button className="ghost" onClick={onBack}>← 資料集</button>
-        {rename ? <><input value={newName} onChange={(e) => setNewName(e.target.value)} style={{ width: 220 }} /><button className="primary" onClick={doRename}>存</button><button onClick={() => setRename(false)}>取消</button></> : <h2 onDoubleClick={() => setRename(true)} title="雙擊改名">{d.name}</h2>}
+        {rename ? <><input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doRename(); if (e.key === "Escape") setRename(false); }} style={{ width: 220 }} /><button className="primary" onClick={doRename}>存</button><button onClick={() => setRename(false)}>取消</button></> : <><h2>{d.name}</h2><button className="ghost" onClick={() => setRename(true)} title="改名">✎</button></>}
         <Pill kind={pillKind}>{pillText}</Pill>
         <span className="small muted">題 {(full ?? d).items} · 已確認 {(full ?? d).trainable} · 驗證集 {(full ?? d).val_images} 張</span>
         <div className="tabs" style={{ marginLeft: "auto" }}>{tabs.map(([k, l]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)}>{l}</button>)}</div>
@@ -158,9 +162,11 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
             <Grid cells={grid} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
           <div className="col">
+            {total === 0 && <div className="next"><b>下一步：把照片丟進來</b><span className="hint">拖曳、選檔、zip，或貼 GB300 上的資料夾路徑。進來的圖會自動分 10% 當驗證集。</span></div>}
             {batch && <BatchCard b={batch} onCancel={cancel} skippedNote={skippedNote} />}
-            <button className="primary big" onClick={label} disabled={busy || running || !judgeOk || gpuBusy || unlabelled === 0 || (mode !== "auto" && nFixed === 0)}>{running ? `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}` : labelText}</button>
-            <div className="note">用「設定」分頁的方式出題（{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}）：先出題（Qwen3-VL-32B，約 20 秒/張，8 張一批）→ Moondream 作答 → 比對。一致的題自動通過，不一致的到「檢查」。</div>
+            {total > 0 && unlabelled > 0 && !running && <div className="next"><b>下一步：讓 AI 導師先標 {n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張</b><span className="hint">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}（改法在「設定」）。先出題（約 20 秒/張，8 張一批）→ Moondream 作答 → 比對；一致的自動通過，不一致的到「檢查」。</span></div>}
+            {total > 0 && <button className="primary big" onClick={label} disabled={busy || running || !judgeOk || gpuBusy || lowMem || unlabelled === 0 || (mode !== "auto" && nFixed === 0)}>{running ? `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}` : labelText}</button>}
+            {total > 0 && mode !== "auto" && nFixed === 0 && <div className="bad hint">「設定」裡還沒有有效的指定題目</div>}
             {(full ?? d).images_pending > 0 && !running && <button onClick={() => setTab("review")}>去檢查（還有 {(full ?? d).images_pending} 張）→</button>}
             {(full ?? d).trainable > 0 && <button onClick={() => go("train")}>已確認 {(full ?? d).trainable} 題 → 去訓練</button>}
             {full && full.batches && full.batches.length > 1 && (

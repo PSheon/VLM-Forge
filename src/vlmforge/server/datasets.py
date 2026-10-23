@@ -129,6 +129,7 @@ class DatasetStore:
     # ------------------------------------------------------------------ images
     def add_image(self, ds_id: int, image_id: str) -> str:
         """Adds an existing workspace image; returns its split."""
+        self.get(ds_id)  # KeyError for a dataset that does not exist (SQLite has no FK on)
         split = split_for(image_id)
         with self.ws.lock:
             self.db.execute(

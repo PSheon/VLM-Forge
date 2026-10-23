@@ -148,7 +148,7 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
           </div>
         )}
         {image && !res && <Canvas src={src} skill={skill} value={null} readOnly height={H} compact />}
-        {!image && <div className="empty">左側選一張圖（任何來源都行，held-out 也可以）。</div>}
+        {!image && <div className="empty">左側選一張圖（資料集的圖、上傳的圖、held-out 都可以），右側選 skill 和題目，按「執行」看 base（和新模型）怎麼答。</div>}
       </section>
       <aside className="panel col">
         <div className="tabs">{(["detect", "point", "query", "caption"] as Skill[]).map((s) => <button key={s} className={s === skill ? "cur" : ""} onClick={() => { setSkill(s); setPrompt(defaultPrompt(s)); }}>{skillLabel[s]}</button>)}</div>

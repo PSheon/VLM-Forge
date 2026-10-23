@@ -59,12 +59,12 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
           <button className="ghost" onClick={() => setAdv(!adv)} style={{ alignSelf: "flex-start" }}>{adv ? "收起進階" : "進階：rank、region head"}</button>
           {adv && <div className="row card"><label className="f">LoRA rank<select value={rank} onChange={(ev) => setRank(+ev.target.value)}>{[8, 16, 24, 32].map((r) => <option key={r} value={r}>{r}</option>)}</select></label><label className="row hint"><input type="checkbox" checked={regionHead} onChange={(ev) => setRegionHead(ev.target.checked)} /> 也訓 region head（座標頭；開了 Orin 載不了）</label></div>}
           <div className="note">LoRA 只掛文字 MLP（Orin 的 Photon 可直接載入）。預設步數＝圖數×2（100–1000）；{autoSteps} 步約 {Math.round(autoSteps / 36)} 分鐘，訓完自動在 CCTV held-out 與各資料集的驗證集評估。</div>
-          {blockers.map((b) => <div key={b} className="bad hint">✗ {b}</div>)}
-          {warns.map((w) => <div key={w} className="warn hint">⚠ {w}</div>)}
         </div>
         <div className="col">
-          <button className="primary big" onClick={start} disabled={blockers.length > 0}>{running ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : "開始訓練"}</button>
-          <div className="small muted">由 {reviewer || "—"} 啟動</div>
+          <button className="primary big" onClick={start} disabled={blockers.length > 0}>{running ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : blockers.length ? "還不能訓練" : `開始訓練（${rows} 筆，${steps === "" ? autoSteps : steps} 步）`}</button>
+          {blockers.map((b) => <div key={b} className="bad hint">✗ {b}</div>)}
+          {warns.map((w) => <div key={w} className="warn hint">⚠ {w}</div>)}
+          {!blockers.length && <div className="small muted">會記為 {reviewer || "—"} 啟動；訓完自動評估 held-out 與驗證集。</div>}
           {runs.map((r) => <RunRow key={r.name} r={r} onDelete={() => setAskDel(r.name)} onCancel={async () => { await api.cancelRun(r.name).catch((err) => say(String(err), "bad")); say("取消中…", "warn"); }} />)}
           {runs.length === 0 && <div className="empty">還沒訓練過。</div>}
         </div>

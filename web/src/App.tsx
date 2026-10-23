@@ -58,7 +58,7 @@ function Shell() {
   const e = status?.engine;
   const running: Batch | undefined = sum?.batches.find((b) => b.job?.state === "running");
   const counts: Record<Step, string> = {
-    datasets: sum ? `${sum.images} 張 · ${sum.items} 題${sum.images_pending ? ` · 還有 ${sum.images_pending} 張要看` : ""}` : "",
+    datasets: sum ? (sum.images ? `${sum.images} 張 · ${sum.items} 題${sum.images_pending ? ` · 還有 ${sum.images_pending} 張要看` : ""}` : "還沒有資料") : "",
     train: sum ? `${sum.trainable} 筆可訓練` : "",
     test: "",
   };
@@ -81,8 +81,7 @@ function Shell() {
             <>
               {!e.weights_ok && <Pill kind="warn" title={`模型權重不在 ${e.weights}`} onClick={() => say(`模型權重不在 ${e.weights}。在 GB300 上：hf download moondream/moondream3.1-9B-A2B model.safetensors --local-dir model-cache/moondream31/weights`, "warn", { sticky: true })}>模型權重缺</Pill>}
               {!e.judge_ok && <Pill kind="warn" title={`出題模型不在 ${e.judge}`} onClick={() => say(`出題模型不在 ${e.judge}（model-cache/judge 要指到 Qwen3-VL-32B-Instruct）`, "warn", { sticky: true })}>出題模型缺</Pill>}
-              <Pill kind={e.busy ? "ok" : "grey"}>GPU {gpuText}</Pill>
-              {e.gpu_free_gb !== undefined && e.gpu_free_gb !== null && e.gpu_free_gb < 70 && !e.judge_loaded && <Pill kind="warn" title="出題模型要約 70 GB；別的訓練正在用 GPU，等它結束">GPU 只剩 {e.gpu_free_gb.toFixed(0)} GB</Pill>}
+              {e.busy ? <Pill kind="ok">GPU {gpuText}</Pill> : e.gpu_free_gb !== undefined && e.gpu_free_gb !== null && e.gpu_free_gb < 70 && !e.judge_loaded ? <Pill kind="warn" title="出題模型要約 70 GB、Moondream 約 24 GB；別的訓練正在用 GPU，等它結束">GPU 被別的訓練佔用，剩 {e.gpu_free_gb.toFixed(0)} GB</Pill> : <Pill kind="grey">GPU 閒置{e.gpu_free_gb ? `，剩 ${e.gpu_free_gb.toFixed(0)} GB` : ""}</Pill>}
               {e.last_error && <Pill kind="bad" title={e.last_error} onClick={() => say(e.last_error!, "bad", { sticky: true })}>上次錯誤</Pill>}
             </>
           ) : <span className="muted">連線中…</span>}
