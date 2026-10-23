@@ -178,3 +178,14 @@ button.ghost.bad { color: var(--bad); }
 
 /* motion off when the OS asks for it (the JS side follows prefers-reduced-motion too) */
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+
+/* ③ test: one card per 考卷, the target one highlighted */
+.suites { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; align-items: start; }
+.suite.target { border-color: var(--acc); }
+.suite.ref { opacity: .8; }
+table.score th { white-space: nowrap; }
+table.score td { padding: 7px 8px; }
+table.score .pill { font-family: var(--mono); padding: 0 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip-btn { padding: 2px 8px; font-size: 12px; border-radius: 999px; color: var(--muted); }
+.chip-btn.on { background: var(--acc-soft); border-color: var(--acc); color: var(--fg); }

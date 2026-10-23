@@ -67,9 +67,10 @@
 
 ## 6. ④ 測試
 
-- 分數表：列＝考卷×skill（真考卷、各資料集驗證集、參考集灰字）；欄＝base、每個 run；格＝分數＋Δ（綠紅）＋「差異」。
+- 頁首：狀態 pill（訓練中 N/M 步／N 個模型可比／還沒有模型）；沒有模型時「下一步」卡（訓練中→完成後多一欄；否則→去訓練）。
+- 分數：一張考卷一張卡（工廠 CCTV 標「v1 目標考卷」橘框、資料集驗證集、參考集淡化）；卡內小表 skill × [base, 每個 run]；run 欄頭掛過關／沒過；格＝分數＋Δ pill（綠紅灰）＋「看差異」；白話註解（F1／答對率、v1 目標）。
 - 看差異：run／考卷／篩選（只看變化／變好／變差／全部）；空間題並排兩張疊圖（正解虛線）；文字題三行＋diff；←/→ 換題。
-- 單張試玩：任一來源的圖、四個 skill、和 base 比的模型；結果可「存成資料集的題」。
+- 試一張：進頁自動選最近一張圖；四個 skill；巡檢快問 chips（值班／安全帽／背心／出口／地面／堆高機數、detect person/forklift/helmet…）；Enter 執行；結果列 pill「base · 3 框 · 420 ms」「新模型 · …」；可「存成資料集的題」。
 - 匯出到 Orin：下載 adapter 包（adapter.pt、local_adapter.py、README、bench_orin.py、scores.json）；region head 警告；載入範例用 `local_adapter.Tuned`（官方 client 的 adapter 只認雲端 id，包裡自附 kestrel AdapterProvider）。
 
 ## 7. 回饋總表

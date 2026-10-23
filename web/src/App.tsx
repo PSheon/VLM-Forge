@@ -94,7 +94,7 @@ function Shell() {
         <Fade k={step}>
           {step === "datasets" && <Datasets status={status} refresh={refresh} go={go} reviewer={name} setGuard={setGuard} />}
           {step === "train" && <Train status={status} go={go} reviewer={name} />}
-          {step === "test" && <Test models={status?.models ?? []} reviewer={name} />}
+          {step === "test" && <Test models={status?.models ?? []} reviewer={name} go={go} />}
         </Fade>
       </main>
       <NameDialog open={askName} initial={name} onDone={(v) => { nameStore.set(v); setName(v); setAskName(false); say(name ? `之後記為：${v}` : `你好，${v}`); }} />
