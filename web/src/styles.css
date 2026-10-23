@@ -44,7 +44,8 @@ main { padding: 10px 16px; }
 .muted { color: var(--muted); }
 .ok { color: var(--ok); }
 .bad { color: var(--bad); }
-.warn { background: var(--warn-bg); color: var(--warn-fg); padding: 6px 12px; border-radius: 6px; }
+.warn { background: var(--warn-bg); color: var(--warn-fg); padding: 6px 12px; border-radius: 6px; overflow-wrap: anywhere; }
+.bad.hint, .ok.hint { overflow-wrap: anywhere; }
 button, input, select, textarea { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
 button { cursor: pointer; white-space: nowrap; }
 button.primary { background: var(--acc); color: #fff; border-color: var(--acc); }
