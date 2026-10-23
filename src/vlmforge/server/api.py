@@ -472,6 +472,18 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         jobs[qid]["resumed"] = True  # before the thread gets there, so the reply says so
         return _batch(q)
 
+    @app.post("/api/queues/{qid}/triage")
+    def triage_queue(qid: int):
+        """Re-run the per-question triage on a batch's pending items (e.g. after the triage
+        rules change): agreed questions leave the human queue, disagreements stay."""
+        try:
+            ws.queue(qid)
+        except KeyError as e:
+            raise HTTPException(404) from e
+        if jobs.get(qid, {}).get("state") == "running":
+            raise HTTPException(409, "還在跑")
+        return ws.triage_items(qid)
+
     @app.post("/api/queues/{qid}/judge")
     def judge_queue(qid: int):
         """(Re)run the judge on this queue's unjudged pending items."""
@@ -604,7 +616,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                 for c, v in zip(chunk, engine.judge_items(asks), strict=True):
                     ws.set_judge(c["id"], v)
                 job["done"] += len(chunk)
-            job["triage"] = ws.triage_images(qid, cfg.get("seed", 0))
+            job["triage"] = ws.triage_items(qid, cfg.get("seed", 0))
             job["state"] = "done"
         except Exception as e:  # noqa: BLE001 - shown in the UI
             job["state"] = "error"

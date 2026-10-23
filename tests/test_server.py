@@ -199,6 +199,7 @@ def test_autogen_queue_per_image_review(client, monkeypatch):
     from vlmforge.server import workspace as wsmod
 
     monkeypatch.setattr(wsmod, "SPOT_MIN", 0)
+    monkeypatch.setattr(wsmod, "SPOT_FRAC", 0)
     for c in ("red", "green", "blue"):
         client.post("/api/images", files={"file": (f"{c}.png", png_bytes(c), "image/png")})
     r = client.post(
@@ -210,7 +211,7 @@ def test_autogen_queue_per_image_review(client, monkeypatch):
     assert q["job"]["state"] == "done", q["job"]
     # per image: detect person (agree), point person (agree), query ("base: 2" vs "2" ->
     # agree), caption (judge stub accepts) -> both images clean; no spot -> all auto
-    assert q["total"] == 8 and q["counts"]["auto"] == 8 and q["job"]["triage"]["clean"] == 2
+    assert q["total"] == 8 and q["counts"]["auto"] == 8 and q["job"]["triage"]["images_left"] == 0
     rows = client.ws.reviewed_rows([q["id"]])
     assert len(rows) == 8 and {r["label_origin"] for r in rows} == {"machine_reviewed"}
     assert next(r for r in rows if r["skill"] == "query")["answer"] == "2"  # teacher text
