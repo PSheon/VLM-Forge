@@ -420,13 +420,18 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             for it in items:
                 by_prompt.setdefault((it["skill"], it["prompt"]), []).append(it)
             job["phase"], job["total"], job["done"] = "predicting", len(items), 0
-            for (skill, prompt), its in by_prompt.items():
-                for i in range(0, len(its), 32):
-                    chunk = its[i : i + 32]
-                    preds = engine.infer([c["path"] for c in chunk], skill, prompt, cfg["model"])
-                    for c, p in zip(chunk, preds, strict=True):
-                        ws.set_pred(c["id"], p, cfg["model"])
-                    job["done"] += len(chunk)
+            try:
+                for (skill, prompt), its in by_prompt.items():
+                    for i in range(0, len(its), 32):
+                        chunk = its[i : i + 32]
+                        preds = engine.infer(
+                            [c["path"] for c in chunk], skill, prompt, cfg["model"]
+                        )
+                        for c, p in zip(chunk, preds, strict=True):
+                            ws.set_pred(c["id"], p, cfg["model"])
+                        job["done"] += len(chunk)
+            except Exception as e:  # noqa: BLE001 - no student (weights missing): humans
+                job["student_error"] = f"{type(e).__name__}: {e}"  # review the teacher alone
             # agreement, and the judge for the teacher's captions
             items = ws.items(qid, "pending")
             caps = [it for it in items if it["skill"] == "caption"]
