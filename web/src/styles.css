@@ -1,0 +1,80 @@
+:root {
+  --bg: #fafaf9;
+  --fg: #1c1917;
+  --muted: #78716c;
+  --card: #fff;
+  --line: #e7e5e4;
+  --acc: #1d4ed8;
+  --box: #f59e0b;
+  --box2: #0ea5e9;
+  --sel: #ef4444;
+  --ok: #15803d;
+  --bad: #b91c1c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1917;
+    --fg: #f5f5f4;
+    --muted: #a8a29e;
+    --card: #292524;
+    --line: #44403c;
+    --acc: #93c5fd;
+    --box: #fbbf24;
+    --box2: #38bdf8;
+    --sel: #f87171;
+    --ok: #4ade80;
+    --bad: #fca5a5;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+a { color: inherit; }
+header.top { display: flex; gap: 18px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+header.top nav a { text-decoration: none; padding: 4px 8px; border-radius: 6px; }
+header.top nav a.cur { background: var(--line); }
+header.top .right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+main { padding: 12px 16px; }
+.muted { color: var(--muted); }
+.ok { color: var(--ok); }
+.bad { color: var(--bad); }
+button, input, select, textarea { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
+button { cursor: pointer; }
+button.primary { background: var(--acc); color: #fff; border-color: var(--acc); }
+button:disabled { opacity: 0.5; cursor: default; }
+textarea { width: 100%; min-height: 90px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grid3 { display: grid; grid-template-columns: 240px 1fr 300px; gap: 14px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 1100px) { .grid3 { grid-template-columns: 1fr; } .grid2 { grid-template-columns: 1fr; } }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.list { max-height: 70vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.list div.it { padding: 4px 8px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--line); }
+.list div.it.cur { background: var(--line); }
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 4px; max-height: 60vh; overflow: auto; }
+.thumbs img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 4px; border: 2px solid transparent; cursor: pointer; }
+.thumbs img.cur { border-color: var(--acc); }
+.tabs { display: flex; gap: 4px; }
+.tabs button.cur { background: var(--acc); color: #fff; border-color: var(--acc); }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 12px; }
+
+/* canvas editor */
+.cv { position: relative; user-select: none; touch-action: none; line-height: 0; }
+.cv img { width: 100%; display: block; border-radius: 6px; }
+.cv .bx { position: absolute; border: 2px solid var(--box); }
+.cv .bx.sel { border-color: var(--sel); background: rgba(239, 68, 68, 0.12); }
+.cv .bx.ro { pointer-events: none; }
+.cv .bx.alt { border-color: var(--box2); border-style: dashed; }
+.cv .h { position: absolute; width: 10px; height: 10px; background: var(--card); border: 2px solid var(--sel); border-radius: 2px; }
+.cv .pt { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: var(--box); border: 2px solid #fff; }
+.cv .pt.sel { background: var(--sel); }
+.cv .pt.alt { background: var(--box2); }
+.cv .draft { position: absolute; border: 2px dashed var(--acc); }
+.cv .lbl { position: absolute; font-size: 11px; line-height: 1; padding: 1px 3px; background: var(--box); color: #000; border-radius: 2px; }
+.legend span { display: inline-block; width: 12px; height: 12px; margin-right: 4px; vertical-align: middle; border-radius: 2px; }
+.diff ins { background: rgba(21, 128, 61, 0.25); text-decoration: none; }
+.diff del { background: rgba(185, 28, 28, 0.25); }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--acc); }

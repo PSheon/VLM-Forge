@@ -19,6 +19,7 @@ ui = [
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",
 ]
+capture = ["av>=14"]
 
 [dependency-groups]
 dev = [

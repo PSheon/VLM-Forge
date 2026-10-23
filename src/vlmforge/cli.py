@@ -46,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=8796)
     s.add_argument("--batch", type=int, default=16)
 
+    c = sub.add_parser("capture", help="one frame per NVR channel over RTSP (GOALS §7)")
+    c.add_argument("--out", type=Path, required=True)
+    c.add_argument("--url", required=True, help="template with {ip} and {ch} / {ch2}")
+    c.add_argument("--nvr", nargs="+", required=True)
+    c.add_argument("--channels", default="1-16")
+
     x = sub.add_parser("export", help="reviewed items -> training rows (+ Data Core bundle)")
     x.add_argument("name")
     x.add_argument("--queue", type=int, nargs="*", help="queue ids (default: every queue)")
@@ -113,6 +119,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         return 0
+    if args.command == "capture":
+        from .capture import capture, parse_channels
+
+        log = capture(args.url, args.nvr, parse_channels(args.channels), args.out)
+        print(f"{len(log['frames'])} frames, {len(log['failed'])} failed -> {args.out}")
+        return 0 if log["frames"] else 1
     if args.command == "export":
         import json
 

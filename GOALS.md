@@ -42,9 +42,10 @@ VLM-Forge 是 **Moondream 3.1 微調的唯一家**：detect / point / query / ca
 | --- | --- |
 | LoRA 位置 | 語言模型 attention + MLP（含 MoE experts） |
 | rank | 起手 r=16、alpha=32；只在 detect 線掃一次 r ∈ {8, 16, 32}，之後固定 |
-| region head | 全參數可訓（detect / point 的座標品質主要靠它） |
+| region head | 解碼側全參數可訓（`RegionHead`：layer norm + coordinate / size head，detect / point 的座標品質主要靠它）；輸入側的座標／尺寸 encoder 凍結 |
 | 視覺編碼器、projector | 凍結 |
 | replay | 自蒸餾 replay 必混（預設 0.5），否則 adapter 會塌到訓練答案 |
+| adapter 檔 | `<name>.pt`：`lora_state_dict`（engine 的 TextLoRA 版面，alpha/r 已折進 B）、`rank`、`alpha`、`region_head`（上游張量名）。kestrel parity 時 LoRA 直接載入，region head 要寫進一份 patch 過的 model 檔 |
 
 ## 6. UI
 
@@ -54,7 +55,7 @@ VLM-Forge 是 **Moondream 3.1 微調的唯一家**：detect / point / query / ca
   1. **工作台**：選圖或上傳 → 選 skill 與模型（base 或任一 adapter）→ 直接拖框、移點、改文字 → 存成 gold 或訓練樣本。
   2. **審核佇列**：對一個資料集批次跑預測，人逐張通過／修正／丟棄，鍵盤快捷鍵。
   3. **對照**：同一張圖 base vs adapter 並排，框／點標差異，文字 diff。
-  4. **Runs／adapter 清單**：訓練 run、loss 曲線（連 TensorBoard）、held-out 分數、目前載入的 adapter。
+  4. **Runs／adapter 清單**：訓練 run、loss 曲線（UI 從 `runs/<name>/log.jsonl` 自繪）、held-out 分數、目前載入的 adapter。
 - 訓練的啟動留在 CLI，UI 不做「按鈕開訓練」。
 
 ## 7. 資料
@@ -63,6 +64,7 @@ VLM-Forge 是 **Moondream 3.1 微調的唯一家**：detect / point / query / ca
 - 人工修正先存本機工作區 `workspace/`（SQLite + 圖檔，gitignore）；`forge export` 匯成 Data Core `_incoming` 格式，由 Data Core 登錄、過 rules §7 後才成為 release。
 - **實驗 run 可以直接讀本機修正**快速迭代；**要打 tag 進 main 的 adapter 只能用 Data Core tagged release 訓練**。
 - 不訓練：任何 `machine_unreviewed`、`evaluation_only`、held-out 來源。
+- **CCTV 訓練資料**：GB300 上現有的 105 張工廠 CCTV 全部是 held-out（`factory-cctv-20260910`），不能訓練。detect 線的訓練資料來自**新擷取**的工廠 CCTV 畫面（`forge capture`，NVR 10.12.31.{6,8,9,12}，不同日期），經 UI 預標＋人工修正後登錄成新的 source + labels layer；held-out 的 2026-09-10／09-11 畫面永遠排除。同一批攝影機、不同時間：held-out 量的是「這些攝影機的畫面」，不是未見過的場域，報告如實註明。
 
 ## 8. 交付
 
