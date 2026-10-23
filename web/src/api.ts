@@ -68,7 +68,9 @@ export interface Batch {
   images_pending?: number;
 }
 
-export interface DatasetConfig { mode?: "auto" | "both" | "fixed"; fixed?: string; topics?: string[]; focus?: string; skills?: Skill[] }
+export interface DatasetConfig { mode?: "auto" | "both" | "fixed"; fixed?: string; topics?: string[]; focus?: string; skills?: Skill[]; probes?: string[] }
+/** autogen.DEFAULT_PROBES: asked on every image in auto mode, absent = a 0-box detect question */
+export const DEFAULT_PROBES = ["person", "forklift", "helmet"];
 
 export interface Dataset {
   id: number;

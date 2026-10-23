@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import __version__, paths
+from ..autogen import DEFAULT_PROBES
 from ..orin import make_bundle
 from .datasets import DatasetStore
 from .export import export_incoming, export_train
@@ -558,7 +559,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                         paths_,
                     )
                     for j, t in enumerate(ts):
-                        per_image[j] += items_from_teacher(t, skills)
+                        per_image[j] += items_from_teacher(t, skills, cfg.get("probes"))
                 if fixed and any(fixed.values()):
                     ts = _with_backoff(lambda ps: engine.teacher_fixed_batch(ps, fixed), paths_)
                     for j, t in enumerate(ts):
@@ -859,6 +860,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             "fixed": cfg.get("fixed", ""),
             "topics": cfg.get("topics") or [],
             "focus": cfg.get("focus", ""),
+            "probes": cfg["probes"] if "probes" in cfg else DEFAULT_PROBES,
             "model": model,
             "seed": 0,
         }

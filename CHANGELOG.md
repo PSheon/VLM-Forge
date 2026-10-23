@@ -11,6 +11,8 @@ All notable changes to VLM-Forge. Versions follow [SemVer](https://semver.org/);
 - **Training always validates when it can.** A run whose datasets had no confirmed question in their val split trained with no val curve at all (ft-1023-1911). It now holds out ~10 % of the train images (≥ 5 images) instead, and the train page's summary says where validation comes from (datasets return `val_rows`), with a warning when there is none.
 
 ### Added
+- **Negative probes in auto mode.** Every image is also asked about a short list of objects (default person, forklift, helmet; editable as 「每張圖都問的物件」); one the teacher did not list becomes a 0-box detect question. On the factory held-out exam Moondream base scores person F1 0.09 (it draws people on empty frames) against the teacher's 0.64, and auto questions alone never ask about what is absent. If the teacher missed the object and Moondream draws it, the question disagrees and goes to a human.
+- **Teacher vs gold on the CCTV exam** (`runs/teacher-eval/`): 8B detect 0.507 / point 0.457 / query 0.971, 32B 0.456 / 0.452 / 0.971, Moondream base 0.368 / 0.557 / 0.981 — the 8B fallback is not worse than the 32B.
 - **Ctrl+Z reopens the last saved question** (any image, a whole 「剩下全存」 counts as one step); reopening an agreed question restores its auto label instead of leaving it empty.
 - **Pace** in the review title row: seconds per question over the recent saves (pauses over 2 min ignored) and the time left for what is still pending.
 - **Point snapping.** A click inside a pre-label box that has no point yet places the point at the box centre; `Alt` places it exactly where you clicked.

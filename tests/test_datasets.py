@@ -170,8 +170,11 @@ def test_dataset_flow(client, monkeypatch):
     d = client.get(f"/api/datasets/{ds['id']}").json()
     # per image: detect person, point person, query count, caption (auto) + detect helmet,
     # query helmet (fixed; caption and person dedupe) = 6
-    assert d["items"] == 24 and d["unlabelled"] == 0 and d["detect"] == 8 and d["query"] == 8
-    assert d["trainable"] == 24  # everything agreed with the stub student
+    # + one probe per image: "forklift" (DEFAULT_PROBES; helmet is a fixed prompt, person listed)
+    assert d["items"] == 28 and d["unlabelled"] == 0 and d["detect"] == 12 and d["query"] == 8
+    # the stub student draws a box for every detect, so the 0-box probes disagree and wait for
+    # a human; everything else agreed
+    assert d["trainable"] == 24 and d["pending"] == 4
     assert client.post(f"/api/datasets/{ds['id']}/label").status_code == 409
     # a server restart loses the job: wipe answers + verdicts of half the items and the
     # in-memory job, then "接著跑" must redo exactly that and end with nothing unfinished
