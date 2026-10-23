@@ -141,7 +141,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const judgeLoaded = status?.engine.judge_loaded ?? false;
   const needGb = status?.engine.judge_need_gb ?? 70;
   const lowMem = freeGb !== null && !judgeLoaded && freeGb < needGb;
-  const labelText = !judgeOk ? "出題模型缺，不能標" : gpuBusy ? "排隊中…（GPU 忙）" : lowMem ? `GPU 只剩 ${freeGb!.toFixed(0)} GB（出題要 ${needGb} GB），等別的訓練結束` : unlabelled === 0 ? "沒有新圖" : `標註新加的 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張`;
+  const labelText = interrupted(batch) ? "先把上一輪接著跑完" : !judgeOk ? "出題模型缺，不能標" : gpuBusy ? "排隊中…（GPU 忙）" : lowMem ? `GPU 只剩 ${freeGb!.toFixed(0)} GB（出題要 ${needGb} GB），等別的訓練結束` : unlabelled === 0 ? "沒有新圖" : `標註新加的 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張`;
   const total = (full ?? d).images;
   const skippedNote = batch?.job?.student_error ? `模型沒作答（${batch.job.student_error}），這批全部交給你看` : null;
   const [pillText, pillKind] = statusPill(full ?? d);
@@ -175,7 +175,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
             <Pop show={total === 0} className="next"><b>下一步：把照片丟進來</b><span className="hint">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</span></Pop>
             {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
             <Pop show={total > 0 && unlabelled > 0 && !running && !interrupted(batch)} className="next"><b>下一步：讓 AI 導師先標 {n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張</b><span className="hint">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}，約 20 秒/張；一致的自動通過，不一致的到「檢查」。</span></Pop>
-            {total > 0 && <button className="primary big" onClick={label} disabled={busy || running || !judgeOk || gpuBusy || lowMem || unlabelled === 0 || (mode !== "auto" && nFixed === 0)}>{running ? `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}` : labelText}</button>}
+            {total > 0 && <button className="primary big" onClick={label} disabled={busy || running || interrupted(batch) || !judgeOk || gpuBusy || lowMem || unlabelled === 0 || (mode !== "auto" && nFixed === 0)}>{running ? `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}` : labelText}</button>}
             {total > 0 && mode !== "auto" && nFixed === 0 && <div className="bad hint">「設定」裡還沒有有效的指定題目</div>}
             {(full ?? d).images_pending > 0 && !running && <button onClick={() => setTab("review")}>去檢查（還有 {(full ?? d).images_pending} 張）→</button>}
             {(full ?? d).trainable > 0 && <button onClick={() => go("train")}>已確認 {(full ?? d).trainable} 題 → 去訓練</button>}
