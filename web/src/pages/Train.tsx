@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, fmt, fmtDelta, phaseLabel, suiteLabel, type Dataset, type Run, type Status } from "../api";
 import { Bar, ConfirmDialog, Pill, useToast } from "../components/ui";
+import { Item, Pop, Stagger } from "../components/motion";
 import type { Step } from "../App";
 
 export default function Train({ status, go, reviewer }: { status: Status | null; go: (s: Step) => void; reviewer: string }) {
@@ -62,14 +63,14 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
         </div>
         <div className="col">
           <button className="primary big" onClick={start} disabled={blockers.length > 0}>{running ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : blockers.length ? "還不能訓練" : `開始訓練（${rows} 筆，${steps === "" ? autoSteps : steps} 步）`}</button>
-          {blockers.map((b) => <div key={b} className="bad hint">✗ {b}</div>)}
-          {warns.map((w) => <div key={w} className="warn hint">⚠ {w}</div>)}
+          {blockers.map((b) => <Pop key={b} className="bad hint">✗ {b}</Pop>)}
+          {warns.map((w) => <Pop key={w} className="warn hint">⚠ {w}</Pop>)}
           {!blockers.length && <div className="small muted">會記為 {reviewer || "—"} 啟動；訓完自動評估 held-out 與驗證集。</div>}
-          {runs.map((r) => <RunRow key={r.name} r={r} onDelete={() => setAskDel(r.name)} onCancel={async () => { await api.cancelRun(r.name).catch((err) => say(String(err), "bad")); say("取消中…", "warn"); }} />)}
+          <Stagger className="col">{runs.map((r) => <Item key={r.name}><RunRow r={r} onDelete={() => setAskDel(r.name)} onCancel={async () => { await api.cancelRun(r.name).catch((err) => say(String(err), "bad")); say("取消中…", "warn"); }} /></Item>)}</Stagger>
           {runs.length === 0 && <div className="empty">還沒訓練過。</div>}
         </div>
       </div>
-      {runs.filter((r) => r.state !== "cancelled").slice(0, 3).map((r) => <RunCard key={r.name} r={r} go={go} />)}
+      <Stagger className="col">{runs.filter((r) => r.state !== "cancelled").slice(0, 3).map((r) => <Item key={r.name}><RunCard r={r} go={go} /></Item>)}</Stagger>
       <ConfirmDialog open={!!askDel} title={`刪除 ${askDel}？`} body="adapter、log、評估報告都會刪。" confirmText="刪除" danger onCancel={() => setAskDel(null)} onConfirm={async () => { await api.deleteRun(askDel!).catch((err) => say(String(err), "bad")); setAskDel(null); load(); }} />
     </div>
   );

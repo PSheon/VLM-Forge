@@ -7,6 +7,7 @@ import Canvas from "../components/Canvas";
 import ImagePicker from "../components/ImagePicker";
 import TextDiff from "../components/TextDiff";
 import { Pill, useToast } from "../components/ui";
+import { Fade } from "../components/motion";
 
 type Tab = "scores" | "diff" | "play" | "orin";
 
@@ -22,6 +23,7 @@ export default function Test({ models, reviewer }: { models: Model[]; reviewer: 
   return (
     <div className="col">
       <div className="tabs">{([["scores", "分數"], ["diff", "看差異"], ["play", "單張試玩"], ["orin", "匯出到 Orin"]] as [Tab, string][]).map(([k, l]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)} disabled={(k === "diff" || k === "orin") && !done.length}>{l}</button>)}</div>
+      <Fade k={tab}>
       {tab === "scores" && data && (
         <div className="panel">
           <div className="tw"><table>
@@ -42,6 +44,7 @@ export default function Test({ models, reviewer }: { models: Model[]; reviewer: 
       {tab === "diff" && <Diff runs={done} suites={suites} initial={diff} />}
       {tab === "play" && <Play models={models} reviewer={reviewer} />}
       {tab === "orin" && <Orin runs={done} />}
+      </Fade>
     </div>
   );
 }
@@ -80,7 +83,7 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
       </div>
       {pairs && (
         <div className="rv-main">
-          <section style={{ minWidth: 0 }}>
+          <Fade k={`${run}/${suite}/${cur}`} style={{ minWidth: 0 }}>
             {p && (p.row.skill === "detect" || p.row.skill === "point") && (
               <div className="grid-2">
                 <div><div className="muted hint">base（實線）vs 正解（虛線）· {score(p.base)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.base.pred)} alt={gt(p.row)} readOnly labels={{ main: "base", alt: "正解" }} height={H} compact /></div>
@@ -94,7 +97,7 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
               </div>
             )}
             {!p && <div className="empty">這個篩選沒有題。</div>}
-          </section>
+          </Fade>
           <aside className="panel"><div className="list" style={{ maxHeight: "calc(100vh - 280px)" }}>{shown.map((q, i) => <div key={i} className={`it${i === cur ? " cur" : ""}`} onClick={() => setCur(i)}>{i + 1}. {q.row.skill} {q.row.object ?? q.row.question} <span className={better(q) ? "ok" : "bad"}>{score(q.base)} → {score(q.adapter)}</span></div>)}</div><div className="muted hint">tp/fp/fn 或 ✓/✗；綠＝新模型比 base 好。← / → 換題。</div></aside>
         </div>
       )}

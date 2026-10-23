@@ -1,6 +1,7 @@
 // Shared UI pieces: toasts (docs/ui-spec §7), dialogs, pills, the name dialog, key help.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion } from "./motion";
 
 type ToastKind = "ok" | "warn" | "bad";
 interface Toast { id: number; text: string; kind: ToastKind; action?: { label: string; run: () => void }; sticky?: boolean }
@@ -20,13 +21,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastCtx.Provider value={{ say, dismiss }}>
       {children}
-      {toast && (
-        <div className={`toast ${toast.kind}`} role="status">
-          <span>{toast.text}</span>
-          {toast.action && <button onClick={() => { toast.action!.run(); dismiss(); }}>{toast.action.label}</button>}
-          {toast.sticky && <button className="x" onClick={dismiss} aria-label="關閉">✕</button>}
-        </div>
-      )}
+      <AnimatePresence>
+        {toast && (
+          <motion.div key={toast.id} className={`toast ${toast.kind}`} role="status" initial={{ opacity: 0, y: 18, x: "-50%", scale: 0.98 }} animate={{ opacity: 1, y: 0, x: "-50%", scale: 1 }} exit={{ opacity: 0, y: 10, x: "-50%", transition: { duration: 0.14 } }}>
+            <span>{toast.text}</span>
+            {toast.action && <button onClick={() => { toast.action!.run(); dismiss(); }}>{toast.action.label}</button>}
+            {toast.sticky && <button className="x" onClick={dismiss} aria-label="關閉">✕</button>}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </ToastCtx.Provider>
   );
 }
@@ -38,11 +41,16 @@ export function Dialog({ open, onClose, children, width = 420 }: { open: boolean
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
-  if (!open) return null;
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" style={{ width: `min(${width}px, 94vw)` }} onClick={(e) => e.stopPropagation()} role="dialog">{children}</div>
-    </div>
+    <AnimatePresence>
+      {open && (
+        <motion.div className="overlay" onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.14 } }}>
+          <motion.div className="modal" style={{ width: `min(${width}px, 94vw)` }} onClick={(e) => e.stopPropagation()} role="dialog" initial={{ opacity: 0, scale: 0.96, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: 6, transition: { duration: 0.14 } }}>
+            {children}
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -96,5 +104,5 @@ export function eta(started: number | undefined, done: number, total: number): n
 }
 
 export function Bar({ done, total, color }: { done: number; total: number; color?: string }) {
-  return <div className="bar"><i style={{ width: `${total ? Math.min(100, (100 * done) / total) : 0}%`, background: color }} /></div>;
+  return <div className="bar"><motion.i initial={false} animate={{ width: `${total ? Math.min(100, (100 * done) / total) : 0}%` }} transition={{ duration: 0.5, ease: "easeOut" }} style={{ background: color }} /></div>;
 }

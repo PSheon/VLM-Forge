@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, parseFixed, phaseLabel, type Batch, type Dataset, type GridCell, type Skill, type Status } from "../api";
 import { Bar, ConfirmDialog, Dialog, Pill, eta, useToast } from "../components/ui";
+import { Fade, Item, Pop, Stagger } from "../components/motion";
 import Review from "./Review";
 import type { Step } from "../App";
 
@@ -25,9 +26,9 @@ export default function Datasets({ status, refresh, go, reviewer, setGuard }: { 
         <button className="primary" onClick={() => setShowNew(true)}>＋ 新資料集</button>
       </div>
       {list.length === 0 && <div className="empty">還沒有資料集。建一個，把照片丟進去，AI 導師先標一輪，你再檢查。</div>}
-      <div className="cards">
-        {list.map((d) => <DatasetCard key={d.id} d={d} onClick={() => setCur(d.id)} />)}
-      </div>
+      <Stagger className="cards">
+        {list.map((d) => <Item key={d.id}><DatasetCard d={d} onClick={() => setCur(d.id)} /></Item>)}
+      </Stagger>
       <NewDataset open={showNew} existing={list.map((d) => d.name)} onClose={() => setShowNew(false)} onCreated={(d) => { setShowNew(false); load(); setCur(d.id); }} />
     </div>
   );
@@ -147,7 +148,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
         <span className="small muted">{(full ?? d).items ? `題 ${(full ?? d).items} · 已確認 ${(full ?? d).trainable} · ` : ""}驗證集 {(full ?? d).val_images} 張</span>
       </div>
       <div className="tabs big">{tabs.map(([k, l]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)}>{l}</button>)}</div>
-
+      <Fade k={tab}>
       {tab === "images" && (
         <div className="grid-2">
           <div className="col">
@@ -163,9 +164,9 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
             <Grid cells={grid} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
           <div className="col">
-            {total === 0 && <div className="next"><b>下一步：把照片丟進來</b><span className="hint">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</span></div>}
+            <Pop show={total === 0} className="next"><b>下一步：把照片丟進來</b><span className="hint">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</span></Pop>
             {batch && <BatchCard b={batch} onCancel={cancel} skippedNote={skippedNote} />}
-            {total > 0 && unlabelled > 0 && !running && <div className="next"><b>下一步：讓 AI 導師先標 {n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張</b><span className="hint">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}，約 20 秒/張；一致的自動通過，不一致的到「檢查」。</span></div>}
+            <Pop show={total > 0 && unlabelled > 0 && !running} className="next"><b>下一步：讓 AI 導師先標 {n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張</b><span className="hint">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}，約 20 秒/張；一致的自動通過，不一致的到「檢查」。</span></Pop>
             {total > 0 && <button className="primary big" onClick={label} disabled={busy || running || !judgeOk || gpuBusy || lowMem || unlabelled === 0 || (mode !== "auto" && nFixed === 0)}>{running ? `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}` : labelText}</button>}
             {total > 0 && mode !== "auto" && nFixed === 0 && <div className="bad hint">「設定」裡還沒有有效的指定題目</div>}
             {(full ?? d).images_pending > 0 && !running && <button onClick={() => setTab("review")}>去檢查（還有 {(full ?? d).images_pending} 張）→</button>}
@@ -216,6 +217,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
           {exp && <div className="hint">寫到 <code>{exp.jsonl}</code>（{exp.rows} 列）· <a href={api.downloadUrl(d.id, "jsonl")}>下載 jsonl</a>{exp.zip && <> · <a href={api.downloadUrl(d.id, "zip")}>下載圖 zip（{exp.images} 張）</a></>}</div>}
         </div>
       )}
+      </Fade>
       <ConfirmDialog open={askDelete} title={`刪除 ${d.name}？`} body="只刪資料集與歸屬；圖和題留在工作區。" confirmText="刪除" typed={d.name} danger onCancel={() => setAskDelete(false)} onConfirm={doDelete} />
     </div>
   );

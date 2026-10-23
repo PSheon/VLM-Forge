@@ -9,6 +9,7 @@
 // `alt` draws a second, read-only set (dashed blue) — the pre-label — toggled by `showAlt`.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Pop } from "./motion";
 import type { Pred, Skill } from "../api";
 
 type Drag =
@@ -37,7 +38,16 @@ const MIN_Z = 1, MAX_Z = 12;
 export default function Canvas({ src, skill, value, onChange, alt, readOnly, labels, height, compact, tags }: CanvasProps) {
   const view = useRef<HTMLDivElement>(null);
   const stage = useRef<HTMLDivElement>(null);
-  const [nat, setNat] = useState<{ w: number; h: number } | null>(null);
+  const img = useRef<HTMLImageElement>(null);
+  // natural size tagged with the URL it belongs to: a cached image can fire `load` before
+  // the reset effect runs, so a plain "set null on src change" left 載入中 on screen forever
+  const [natFor, setNatFor] = useState<{ w: number; h: number; url: string } | null>(null);
+  const [tries, setTries] = useState(0);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [slow, setSlow] = useState(false);
+  const url = tries ? `${src}${src.includes("?") ? "&" : "?"}r=${tries}` : src;
+  const nat = natFor && natFor.url === url ? natFor : null;
+  const ready = !!nat;
   const [fit, setFit] = useState({ w: 0, h: 0, ox: 0, oy: 0 });
   const [z, setZ] = useState(1);
   const [t, setT] = useState({ x: 0, y: 0 });
@@ -63,7 +73,11 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
   }, [nat]);
   useLayoutEffect(layout, [layout]);
   useEffect(() => { if (!view.current) return; const ro = new ResizeObserver(layout); ro.observe(view.current); return () => ro.disconnect(); }, [layout]);
-  useEffect(() => { setSel(null); setZ(1); setT({ x: 0, y: 0 }); setNat(null); }, [src]);
+  useEffect(() => { setSel(null); setZ(1); setT({ x: 0, y: 0 }); setTries(0); setFailed(null); }, [src]);
+  const measured = useCallback((el: HTMLImageElement | null) => { if (el && el.complete && el.naturalWidth) setNatFor({ w: el.naturalWidth, h: el.naturalHeight, url: el.getAttribute("src") ?? url }); }, [url]);
+  useLayoutEffect(() => { measured(img.current); }, [measured]); // already in cache → no load event to wait for
+  useEffect(() => { setSlow(false); if (ready) return; const t = window.setTimeout(() => setSlow(true), 6000); return () => window.clearTimeout(t); }, [url, ready]);
+  const retry = () => { setFailed(null); setTries((n) => n + 1); };
   useEffect(() => setSel(null), [skill]);
 
   useEffect(() => {
@@ -177,7 +191,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
       </div>
       <div className="cv-view" ref={view} style={{ height: height ?? "calc(100vh - 170px)", cursor }} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onContextMenu={(e) => e.preventDefault()}>
         <div className="cv-stage" ref={stage} style={{ width: fit.w, height: fit.h, left: fit.ox, top: fit.oy, transform: `translate(${t.x}px, ${t.y}px) scale(${z})`, ["--s" as string]: z }}>
-          <img src={src} draggable={false} alt="" onLoad={(e) => setNat({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />
+          <img ref={img} src={url} className={ready ? "on" : ""} draggable={false} alt="" onLoad={(e) => measured(e.currentTarget)} onError={() => setFailed(url)} />
           {overlays && spatial && showAlt && alt?.boxes?.map((b, i) => <div key={`a${i}`} className="bx alt ro" style={boxStyle(b)}><span className="tag alt">{labels?.alt ?? "預標"} {i + 1}</span></div>)}
           {overlays && spatial && showAlt && alt?.points?.map((p, i) => <div key={`ap${i}`} className="pt alt ro" style={{ left: pct(p[0]), top: pct(p[1]) }} />)}
           {overlays && skill === "detect" && boxes.map((b, i) => (
@@ -189,7 +203,9 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
           {overlays && skill === "point" && points.map((p, i) => <div key={i} data-i={i} className={`pt${sel === i ? " sel" : ""}${editable ? "" : " ro"}`} style={{ left: pct(p[0]), top: pct(p[1]) }} title={`${i + 1}`} />)}
           {drag?.kind === "new" && <div className="draft" style={boxStyle(fix([drag.x0, drag.y0, drag.x1, drag.y1]))} />}
         </div>
-        {!nat && <div className="cv-loading muted">載入中…</div>}
+        <Pop show={!ready} className="cv-loading">
+          {failed === url ? <span className="row bad">圖片載不出來 <button onClick={retry}>重試</button></span> : <span className="row muted"><i className="spin" />載入中…{slow && <button onClick={retry}>重試</button>}</span>}
+        </Pop>
       </div>
     </div>
   );

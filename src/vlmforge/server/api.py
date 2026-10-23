@@ -9,6 +9,7 @@ image) and ``GET /api/heldout/diff`` (two eval reports). Runs: ``GET /api/runs``
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -328,7 +329,11 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             cache.parent.mkdir(parents=True, exist_ok=True)
             img = Image.open(im["path"]).convert("RGB")
             img.thumbnail((w, w * 4), Image.LANCZOS)
-            img.save(cache, "JPEG", quality=85)
+            # write-then-rename: a second request for the same image must never be served
+            # a half-written file (that showed up as images that never finished loading)
+            tmp = cache.with_name(f"{cache.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            img.save(tmp, "JPEG", quality=85)
+            os.replace(tmp, cache)
         return FileResponse(cache, headers={"Cache-Control": "max-age=86400"})
 
     # ------------------------------------------------------------------ inference

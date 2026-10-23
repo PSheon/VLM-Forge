@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, nameStore, type Batch, type Status, type Summary } from "./api";
 import { HelpOverlay, NameDialog, Pill, ToastProvider, useToast } from "./components/ui";
+import { Fade, MotionRoot } from "./components/motion";
 import Datasets from "./pages/Datasets";
 import Train from "./pages/Train";
 import Test from "./pages/Test";
@@ -23,7 +24,7 @@ const HELP: Record<Step, [string, string][]> = {
 };
 
 export default function App() {
-  return <ToastProvider><Shell /></ToastProvider>;
+  return <MotionRoot><ToastProvider><Shell /></ToastProvider></MotionRoot>;
 }
 
 function Shell() {
@@ -90,9 +91,11 @@ function Shell() {
         </div>
       </header>
       <main>
-        {step === "datasets" && <Datasets status={status} refresh={refresh} go={go} reviewer={name} setGuard={setGuard} />}
-        {step === "train" && <Train status={status} go={go} reviewer={name} />}
-        {step === "test" && <Test models={status?.models ?? []} reviewer={name} />}
+        <Fade k={step}>
+          {step === "datasets" && <Datasets status={status} refresh={refresh} go={go} reviewer={name} setGuard={setGuard} />}
+          {step === "train" && <Train status={status} go={go} reviewer={name} />}
+          {step === "test" && <Test models={status?.models ?? []} reviewer={name} />}
+        </Fade>
       </main>
       <NameDialog open={askName} initial={name} onDone={(v) => { nameStore.set(v); setName(v); setAskName(false); say(name ? `之後記為：${v}` : `你好，${v}`); }} />
       <HelpOverlay open={help} onClose={() => setHelp(false)} keys={HELP[step]} />

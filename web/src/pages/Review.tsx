@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
 import Canvas from "../components/Canvas";
 import { Dialog, Pill, useToast } from "../components/ui";
+import { Fade, Pop } from "../components/motion";
 import type { Step } from "../App";
 
 export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void }) {
@@ -48,7 +49,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       const r = await api.nextImage(reviewer, after, dsId);
       if (!("image" in r)) { setReview(null); setMsg("都看完了"); refresh(); return; }
       open(r as ImageReview);
-    } catch (e) { say(String(e), "bad"); }
+    } catch (e) { setReview(null); setMsg(`取圖失敗：${String(e)}`); say(String(e), "bad"); }
   }, [reviewer, dsId, refresh, open, say]);
   useEffect(() => {
     if (openImage) { started.current = true; api.reviewImage(openImage).then((r) => { open(r); onOpened?.(); }).catch((e) => say(String(e), "bad")); return; }
@@ -116,7 +117,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
 
   if (sum && sum.items === 0) return <div className="empty">這個資料集還沒有題。到「圖片」分頁加照片、按「標註」。</div>;
   if (!review || !it) {
-    return <div className="empty">{msg === "都看完了" ? <>這個資料集都看完了（已確認 {sum?.trainable ?? 0} 題）。<button className="primary" onClick={() => go("train")} style={{ marginLeft: 8 }}>去訓練 →</button></> : msg || (sum?.images_pending ? "載入中…" : "沒有待看的圖。到「圖片」分頁點任一張可以重看。")}</div>;
+    return <div className="empty">{msg === "都看完了" ? <>這個資料集都看完了（已確認 {sum?.trainable ?? 0} 題）。<button className="primary" onClick={() => go("train")} style={{ marginLeft: 8 }}>去訓練 →</button></> : msg ? <span className="row" style={{ justifyContent: "center" }}><span className="bad">{msg}</span><button onClick={() => nextImage()}>重試</button></span> : sum?.images_pending ? <span className="row" style={{ justifyContent: "center" }}><i className="spin" />載入中…</span> : "沒有待看的圖。到「圖片」分頁點任一張可以重看。"}</div>;
   }
   const changed = JSON.stringify(label) !== JSON.stringify(it.pred);
   const unsupported = it.skill === "caption" ? (it.judge?.unsupported ?? []).filter((p) => (label?.text ?? "").includes(p)) : [];
@@ -142,7 +143,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       </div>
       <div className="rv-main">
         <Canvas src={api.imageUrl(review.image.id, 2048)} skill={it.skill} value={label} onChange={(p, what) => edit(p, what)} alt={spatial ? it.teacher : null} labels={spatial ? { main: "目前（可改）", alt: "預標" } : undefined} height="calc(100vh - 150px)" compact />
-        <aside className="rv-side">
+        <Fade k={it.id} className="rv-side" y={10}>
           <div className={`q ${it.verdict === "fix" ? "q-fix" : it.verdict === "accept" ? "q-acc" : ""}`}>
             <div className="muted hint">{it.verdict === "fix" ? "● 不一致，請你看" : it.verdict === "accept" ? "○ 一致" : "– 未比對（模型沒作答）"}{it.spot ? " · 抽查" : ""}{it.status !== "pending" ? ` · ${statusLabel[it.status]}${it.reviewer ? `（${it.reviewer}）` : ""}` : ""}</div>
             <div className="q-title">{itemTitle(it)}</div>
@@ -165,7 +166,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
               </div>
             </>
           )}
-          {dirty && <div className="warn hint">✎ 改過了，還沒存。<kbd>Enter</kbd> 存，<kbd>Z</kbd> 還原</div>}
+          <Pop show={dirty} className="warn hint">✎ 改過了，還沒存。<kbd>Enter</kbd> 存，<kbd>Z</kbd> 還原</Pop>
           <div className="row">
             <button className="primary big" onClick={accept}>{changed ? "存修正" : "沒問題"} <kbd>Enter</kbd></button>
             <button onClick={discard}>丟棄 <kbd>D</kbd></button>
@@ -175,7 +176,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
             <button onClick={() => guarded(() => nextImage(review.image.id))} title="N">跳過這張</button>
           </div>
           <div className="hint muted">{reviewer} 認領中{claimedOther ? `（${claimedOther} 也在看）` : ""}</div>
-        </aside>
+        </Fade>
       </div>
       <Dialog open={!!pendingJump} onClose={() => setPendingJump(null)}>
         <h2>有改動還沒存</h2>
