@@ -102,14 +102,14 @@ export default function Review({ reviewer, sum, refresh, go }: { reviewer: strin
               <button className="primary" onClick={confirm}>整張確認 <kbd>Enter</kbd></button>
               <button onClick={() => next(review.image.id)}>跳過 <kbd>N</kbd></button>
             </div>
-            <div className="hint muted">這張圖 {review.items.length} 題。確認＝每題照目前畫面存；✕ 的丟棄。</div>
+            <div className="hint muted">這張圖 {review.items.length} 題。確認＝每題照目前畫面存；✕ 的丟棄。<br /><span className="bad">●</span> 不一致（模型 vs 預標）請你看 · <span className="ok">○</span> 一致 · <span className="muted">–</span> 未比對（模型沒作答）</div>
             <div className="list" style={{ maxHeight: "36vh" }}>
               {review.items.map((x) => {
                 const dd = dec[x.id];
                 const changed = dd && JSON.stringify(dd.label) !== JSON.stringify(x.pred);
                 return (
                   <div key={x.id} className={`it${sel === x.id ? " cur" : ""}`} onClick={() => setSel(x.id)} style={{ textDecoration: dd?.action === "discard" ? "line-through" : undefined }}>
-                    <span className={x.verdict === "fix" && x.status === "pending" ? "bad" : x.status === "auto" ? "muted" : "ok"}>{x.verdict === "fix" && x.status === "pending" ? "●" : "○"}</span> {title(x)}
+                    <span className={x.verdict === "fix" ? "bad" : x.verdict === "accept" ? "ok" : "muted"} title={x.verdict === "fix" ? "不一致：模型答案和預標不同" : x.verdict === "accept" ? "一致：模型答案和預標相同" : "未比對：模型沒作答"}>{x.verdict === "fix" ? "●" : x.verdict === "accept" ? "○" : "–"}</span> {title(x)}
                     <span className="muted"> — {summary(dd?.label)}{changed ? " ✎" : ""}{x.status !== "pending" ? ` · ${statusLabel[x.status]}` : ""}</span>
                     <button style={{ float: "right", padding: "0 6px" }} title="丟棄這題 (D)" onClick={(e) => { e.stopPropagation(); setDec((y) => ({ ...y, [x.id]: { ...y[x.id], action: y[x.id].action === "discard" ? "approve" : "discard" } })); }}>{dd?.action === "discard" ? "↺" : "✕"}</button>
                   </div>
