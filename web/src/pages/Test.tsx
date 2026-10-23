@@ -44,12 +44,10 @@ export default function Test({ models, reviewer, go }: { models: Model[]; review
 const suiteKind = (s: string): ["target" | "val" | "ref", string] => (s === "heldout-cctv" ? ["target", "v1 目標考卷"] : s.startsWith("val-") ? ["val", "你的資料集留下的 10%"] : ["ref", "參考，不當目標"]);
 
 function Scores({ data, done, running, suites, go, onDiff }: { data: { base: Record<string, Record<string, number>> }; done: Run[]; running?: Run; suites: string[]; go: (s: Step) => void; onDiff: (run: string, suite: string) => void }) {
+  const best = done[0];
   return (
+    <div className="page">
     <div className="col">
-      <Pop show={!done.length} className="next">
-        <b>{running ? `${running.name} 訓練中，完成後這裡會多一欄` : "還沒有訓練好的模型"}</b>
-        <span className="hint">{running ? `第 ${running.last?.step ?? 0}/${running.steps} 步；訓完自動在每張考卷評分。` : <>下面是 base 的起點分數。<button className="ghost" onClick={() => go("train")} style={{ padding: "0 6px" }}>去訓練 →</button></>}</span>
-      </Pop>
       <div className="suites">
         {suites.map((s) => {
           const [kind, why] = suiteKind(s);
@@ -80,6 +78,13 @@ function Scores({ data, done, running, suites, go, onDiff }: { data: { base: Rec
       </div>
       <div className="muted hint">分數 0–1，越高越好：Detect／Point＝找對的比例（F1），Query／Caption＝答對的比例；綠紅小字＝比 base 高／低幾個百分點。考卷的圖從不進訓練。v1 目標：工廠 CCTV 的 Detect 和 Query 都不低於 base。</div>
     </div>
+    <div className="actions">
+      {best ? <button className="primary big" onClick={() => onDiff(best.name, "heldout-cctv")}>看 {best.name} 的差異 →</button> : <button className="primary big" onClick={() => go("train")} disabled={!!running}>{running ? `${running.name} 訓練中…` : "去訓練 →"}</button>}
+      <Pop show={!done.length} className="hint muted">{running ? `第 ${running.last?.step ?? 0}/${running.steps} 步；訓完自動在每張考卷評分，這裡會多一欄。` : "左邊是 base 的起點分數；訓一個模型後會多一欄。"}</Pop>
+      {best?.gate && <div className={`hint ${best.gate.passed ? "ok" : "bad"}`}>{best.name}：{best.gate.passed ? "比 base 好（工廠 CCTV）" : "沒有比 base 好（工廠 CCTV）"}</div>}
+      <div className="hint muted">看差異＝逐題看 base 和新模型哪裡不同；試一張＝拿任何圖問兩個模型。</div>
+    </div>
+    </div>
   );
 }
 
@@ -108,6 +113,7 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
   const H = "calc(100vh - 330px)";
   const nBetter = shown.filter(better).length;
   return (
+    <div className="page">
     <div className="col">
       <div className="panel row">
         <label className="row">模型 <select value={run} onChange={(e) => setRun(e.target.value)}>{runs.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}</select></label>
@@ -117,7 +123,6 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
         {err && <span className="bad hint">{err}</span>}
       </div>
       {pairs && (
-        <div className="rv-main">
           <Fade k={`${run}/${suite}/${cur}`} style={{ minWidth: 0 }}>
             {p && <div className="row hint" style={{ marginBottom: 6 }}><Pill kind={better(p) ? "ok" : "bad"}>{better(p) ? "新模型較好" : "新模型較差"}</Pill><span className="muted">{p.row.skill} · {p.row.object ?? p.row.question ?? "caption"} · 第 {cur + 1}/{shown.length} 題 · ← → 換題</span></div>}
             {p && (p.row.skill === "detect" || p.row.skill === "point") && (
@@ -134,9 +139,13 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
             )}
             {!p && <div className="empty">這個篩選沒有題。</div>}
           </Fade>
-          <aside className="panel"><div className="list" style={{ maxHeight: "calc(100vh - 280px)" }}>{shown.map((q, i) => <div key={i} className={`it${i === cur ? " cur" : ""}`} onClick={() => setCur(i)}>{i + 1}. {q.row.skill} {q.row.object ?? q.row.question} <span className={better(q) ? "ok" : "bad"}>{score(q.base)} → {score(q.adapter)}</span></div>)}</div><div className="muted hint">框題＝對/多/漏 的數量，文字題＝✓/✗；綠＝新模型比 base 好。</div></aside>
-        </div>
       )}
+    </div>
+    <div className="actions">
+      <div className="row"><button onClick={() => setCur((c) => Math.max(0, c - 1))} disabled={cur <= 0} title="←">←</button><button className="primary big" onClick={() => setCur((c) => Math.min(shown.length - 1, c + 1))} disabled={!shown.length || cur >= shown.length - 1}>下一題 → <kbd>→</kbd></button></div>
+      {pairs && <div className="list" style={{ maxHeight: "calc(100vh - 220px)" }}>{shown.map((q, i) => <div key={i} className={`it${i === cur ? " cur" : ""}`} onClick={() => setCur(i)}>{i + 1}. {q.row.skill} {q.row.object ?? q.row.question} <span className={better(q) ? "ok" : "bad"}>{score(q.base)} → {score(q.adapter)}</span></div>)}</div>}
+      <div className="muted hint">框題＝對/多/漏 的數量，文字題＝✓/✗；綠＝新模型比 base 好。</div>
+    </div>
     </div>
   );
   function score(x: HeldoutPair["base"]) { return x.tp_fp_fn ? x.tp_fp_fn.join("/") : x.ok ? "✓" : "✗"; }
@@ -181,7 +190,8 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
   const lbl = (n: string) => models.find((m) => m.name === n)?.label ?? n;
   const pick = (s: Skill, p: string) => { setSkill(s); setPrompt(p); };
   return (
-    <div className="grid-3">
+    <div className="page">
+    <div className="play-left">
       <aside className="panel"><ImagePicker value={image?.id ?? null} onPick={setImage} /></aside>
       <section className="col" style={{ minWidth: 0 }}>
         {image && <div className="row hint"><span className="muted">{image.path.split("/").slice(-1)[0]}</span>{res && <><Pill kind="grey">base · {summary(pa)} · {res.base.ms} ms</Pill>{b !== "base" && res[b] && <Pill kind="ok">{lbl(b)} · {summary(pb)} · {res[b].ms} ms</Pill>}</>}{busy && <span className="muted"><i className="spin" />模型在答…</span>}</div>}
@@ -203,32 +213,33 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
         {image && !res && <Canvas src={src} skill={skill} value={null} readOnly height={H} compact />}
         {!image && <div className="empty">左邊選一張圖。</div>}
       </section>
-      <aside className="panel col">
+    </div>
+      <div className="actions">
+        <button className="primary big" onClick={run} disabled={!image || busy}>{busy ? "執行中…" : !image ? "先選一張圖" : `執行：${skillLabel[skill]} ${short(prompt)} ⏎`}</button>
         <div className="tabs">{SKILLS.map((s) => <button key={s} className={s === skill ? "cur" : ""} onClick={() => pick(s, defaultPrompt(s))}>{skillLabel[s]}</button>)}</div>
         <label className="f">{skill === "query" ? "問題" : skill === "caption" ? "長度（short / normal / long）" : "找什麼"}<input value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && run()} /></label>
         <div className="chips">{QUICK.map(([s, p]) => <button key={s + p} className={`chip-btn${s === skill && p === prompt ? " on" : ""}`} onClick={() => pick(s, p)} title={skillLabel[s]}>{s === "query" ? p : `${skillLabel[s]}: ${p}`}</button>)}</div>
         <label className="f">和 base 比的模型<select value={b} onChange={(e) => setB(e.target.value)}>{models.map((m) => <option key={m.name} value={m.name}>{m.name === "base" ? "只跑 base" : m.label}</option>)}</select></label>
-        <button className="primary big" onClick={run} disabled={!image || busy}>{busy ? "執行中…" : !image ? "先選一張圖" : "執行 ⏎"}</button>
         <Pop show={!!res} className="col card">
           <div className="hint muted">把畫面上的答案存成資料集的題（視為已確認）：</div>
           <div className="row"><select value={saveTo} onChange={(e) => setSaveTo(e.target.value === "" ? "" : +e.target.value)}><option value="">選資料集</option>{datasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select><button onClick={save} disabled={saveTo === "" || !(label ?? pa)}>存成題</button></div>
           {!label && <div className="hint muted">{summary(pa ?? emptyLabel(skill))}</div>}
         </Pop>
-      </aside>
+      </div>
     </div>
   );
 }
+
+const short = (t: string) => (t.length > 26 ? t.slice(0, 26) + "…" : t);
 
 function Orin({ runs }: { runs: Run[] }) {
   const [sel, setSel] = useState(runs[0]?.name ?? "");
   const r = runs.find((x) => x.name === sel);
   return (
-    <div className="grid-2">
+    <div className="page">
+      <div className="col">
       <div className="panel col">
-        <h3>匯出到 Orin AGX</h3>
-        <label className="f">模型<select value={sel} onChange={(e) => setSel(e.target.value)}>{runs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}</select></label>
-        {r && <div className="row hint"><Pill kind={r.region_head ? "warn" : "ok"}>{r.region_head ? "有 region head：Photon 載不了，只能在 Forge 跑" : "Photon 相容（只掛文字 MLP）"}</Pill><span className="muted">r{r.rank} · {r.rows} 筆 · {r.steps} 步</span></div>}
-        <a className="btn primary" href={r ? api.orinUrl(r.name) : "#"} aria-disabled={!r}>下載 adapter 包（adapter.pt、local_adapter.py、README、bench_orin.py、scores.json）</a>
+        <h3>在 Orin AGX 上用</h3>
         <pre className="code">{`pip install moondream          # 帶 kestrel（Photon）
 from PIL import Image
 from local_adapter import Tuned
@@ -239,6 +250,13 @@ m.base.detect(img, "person")   # 同一個 engine 跑 base 對照`}</pre>
         <div className="muted hint">官方 client 的 adapter 只認雲端 id，所以包裡附 <code>local_adapter.py</code>（kestrel 的 AdapterProvider，從本機檔載）。Orin 上跑 <code>python bench_orin.py --images ./frames --adapter adapter.pt</code> 量延遲（base vs adapter，每題毫秒，寫到 bench.json）；分數不在 Orin 上算。</div>
       </div>
       <div className="panel col"><h3>分數（這個模型）</h3>{r && Object.entries(r.evals).map(([s, m]) => <div key={s} className="hint">{suiteLabel(s)}：{Object.entries(m).map(([k, v]) => `${k} ${fmt(v)}`).join(" · ")}</div>)}{r?.gate && <div className={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "比 base 好" : "沒有比 base 好"}</div>}</div>
+      </div>
+      <div className="actions">
+        <a className="btn primary big" href={r ? api.orinUrl(r.name) : "#"} aria-disabled={!r} style={{ textAlign: "center" }}>下載 adapter 包</a>
+        <label className="f">模型<select value={sel} onChange={(e) => setSel(e.target.value)}>{runs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}</select></label>
+        {r && <div className="col hint"><Pill kind={r.region_head ? "warn" : "ok"}>{r.region_head ? "有 region head：Photon 載不了，只能在 Forge 跑" : "Photon 相容（只掛文字 MLP）"}</Pill><span className="muted">r{r.rank} · {r.rows} 筆 · {r.steps} 步</span></div>}
+        <div className="muted hint">zip 內：adapter.pt、local_adapter.py、README.md、bench_orin.py、scores.json</div>
+      </div>
     </div>
   );
 }
