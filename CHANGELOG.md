@@ -8,6 +8,7 @@ All notable changes to VLM-Forge. Versions follow [SemVer](https://semver.org/);
 - **Count answers given by pointing.** Moondream 3 sometimes answers "How many forklifts are there?" with `There is` + a grounded point (the engine does the same); the point was dropped and the answer read "There is ". `Moondream.query_grounded()` keeps the points, the agreement rule counts them, and the UI shows `There is⟨1 個點⟩`. Held-out scoring keeps the plain `query()`, byte-identical to the engine.
 - **Re-running triage** no longer re-draws the spot check (it had auto-passed 128 of 149 sampled questions on a half-reviewed batch).
 - The AI-teacher settings' save row stays in view while the action column scrolls; side-by-side canvases keep their controls on one line.
+- **Training always validates when it can.** A run whose datasets had no confirmed question in their val split trained with no val curve at all (ft-1023-1911). It now holds out ~10 % of the train images (≥ 5 images) instead, and the train page's summary says where validation comes from (datasets return `val_rows`), with a warning when there is none.
 
 ### Added
 - `web/e2e/smoke.mjs` (`npm run e2e`): the UI contract of docs/ui-spec §1 as a read-only Playwright check.

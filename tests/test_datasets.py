@@ -235,3 +235,22 @@ def test_dataset_flow(client, monkeypatch):
     assert set(names) == set(BUNDLE_FILES)
     client.delete(f"/api/datasets/{ds['id']}")
     assert client.get("/api/datasets").json() == []
+
+
+def test_write_config_always_validates_when_it_can(tmp_path, monkeypatch):
+    """ft-1023-1911 trained blind: the dataset's val split had no confirmed question and two
+    images were too few to split. The datasets' val rows win; otherwise ~10 % of ≥ 5 images."""
+    import yaml
+
+    from vlmforge import paths
+    from vlmforge.server.pipeline import write_config
+
+    monkeypatch.setattr(paths, "RUNS", tmp_path / "runs")
+    data = lambda name, n, val=None: yaml.safe_load(  # noqa: E731
+        write_config(name, tmp_path / "t.jsonl", n, 100, 2e-4, 16, False, val).read_text()
+    )["data"]
+    with_val = data("a", 113, [tmp_path / "val.jsonl"])
+    assert with_val["val_images"] == 0 and with_val["val"] == [str(tmp_path / "val.jsonl")]
+    assert data("b", 113)["val_images"] == 11
+    assert data("c", 6)["val_images"] == 1
+    assert data("d", 2)["val_images"] == 0

@@ -32,6 +32,8 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   const rows = chosen.reduce((a, d) => a + d.trainable, 0);
   const images = chosen.reduce((a, d) => a + (d.trainable_images ?? 0), 0);
   const val = chosen.reduce((a, d) => a + d.val_images, 0);
+  const valRows = chosen.reduce((a, d) => a + (d.val_rows ?? 0), 0);
+  const innerVal = valRows === 0 && images >= 5 ? Math.min(50, Math.max(1, Math.floor(images / 10))) : 0; // pipeline.write_config
   const sk = (d: Dataset | Dataset[], k: SkillKey) => ([] as Dataset[]).concat(d).reduce((a, x) => a + (x.trainable_by_skill?.[k] ?? 0), 0);
   const bySkill = Object.fromEntries(SKILL_KEYS.map((k) => [k, sk(chosen, k)])) as Record<SkillKey, number>; // confirmed, train split only
   const autoSteps = Math.max(100, Math.min(1000, images * 2));
@@ -49,6 +51,7 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   if (rows > 0 && images < 10) warns.push(`只有 ${images} 張圖有確認的題：模型會把這幾張背起來，多看幾張再訓比較值`);
   for (const k of SKILL_KEYS) if (bySkill[k] > 0 && bySkill[k] < 20) warns.push(`${k} 只有 ${bySkill[k]} 筆，效果有限`);
   if (regionHead) warns.push("開了 region head，這個 adapter Orin 的 Photon 載不了");
+  if (rows > 0 && valRows === 0 && !innerVal) warns.push("沒有驗證資料：驗證集還沒有確認的題、圖也太少，訓練中看不到 val loss（看不出過擬合）");
   const toggle = (d: Dataset) => { if (d.trainable === 0) return; setPicked((p) => (p.includes(d.id) ? p.filter((x) => x !== d.id) : [...p, d.id])); };
   const shown = running ?? runs.find((r) => r.name === openRun) ?? runs.find((r) => r.state !== "cancelled");
 
@@ -113,6 +116,7 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
             <dt>資料集</dt><dd>{chosen.length ? chosen.map((d) => d.name).join("＋") : "—"}</dd>
             <dt>題目</dt><dd>{rows} 筆 · {images} 張圖</dd>
             <dt>步數</dt><dd>{nSteps} 步 · 約 {Math.max(1, Math.round(nSteps / 36))} 分鐘</dd>
+            <dt>驗證</dt><dd>{valRows ? `資料集驗證集 ${valRows} 筆` : innerVal ? `從訓練圖切 ${innerVal} 張（驗證集還沒有確認的題）` : "無"}</dd>
             <dt>評分</dt><dd>工廠 CCTV{val ? ` ＋ ${chosen.filter((d) => d.val_images).length} 個驗證集（${val} 張）` : ""}</dd>
           </dl>
           <SkillMix counts={bySkill} />

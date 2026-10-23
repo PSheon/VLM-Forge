@@ -246,6 +246,14 @@ class DatasetStore:
         out.update({k: (c[k] or 0) for k in c.keys()})
         out["trainable"] = out["auto"] + out["reviewed"]
         out["trainable_images"] = ti or 0  # train-split images with ≥1 confirmed item
+        out["val_rows"] = self.db.execute(  # confirmed questions in the val split (the val curve)
+            "select count(*) from items join queues on queues.id = items.queue_id"
+            " join dataset_images di on di.image_id = items.image_id"
+            " and di.dataset_id = queues.dataset_id"
+            " where queues.dataset_id = ? and di.split = 'val'"
+            " and items.status in ('auto', 'approved', 'corrected')",
+            (ds_id,),
+        ).fetchone()[0]
         out["trainable_by_skill"] = {row["skill"]: row["n"] for row in ts}
         # the spot check measures the teacher: of the agreed questions a human re-checked, how
         # many did they leave as they were (approved) vs change or discard
