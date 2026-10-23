@@ -2,17 +2,19 @@
 // eval reports item by item (only the items whose score changed).
 
 import { useEffect, useState } from "react";
-import { api, promptLabel, skillLabel, type HeldoutPair, type ImageRow, type Model, type Pred, type Report, type Skill } from "../api";
+import { api, defaultPrompt, promptLabel, skillLabel, summary, type HeldoutPair, type ImageRow, type Model, type Pred, type Report, type Skill } from "../api";
 import Canvas from "../components/Canvas";
 import ImagePicker from "../components/ImagePicker";
 import TextDiff from "../components/TextDiff";
-import { summary } from "./Workbench";
 
 export default function Compare({ models }: { models: Model[] }) {
   const [mode, setMode] = useState<"live" | "heldout">("live");
   return (
     <div className="col">
-      <div className="tabs"><button className={mode === "live" ? "cur" : ""} onClick={() => setMode("live")}>單張對照</button><button className={mode === "heldout" ? "cur" : ""} onClick={() => setMode("heldout")}>Held-out 報告對照</button></div>
+      <div className="row">
+        <div className="tabs"><button className={mode === "live" ? "cur" : ""} onClick={() => setMode("live")}>單張對照</button><button className={mode === "heldout" ? "cur" : ""} onClick={() => setMode("heldout")}>Held-out 報告對照</button></div>
+        <span className="muted hint">{mode === "live" ? "同一張圖、同一題，兩個模型並排。" : "兩份 forge eval 報告逐題比對，只列分數變動的題。"}</span>
+      </div>
       {mode === "live" ? <Live models={models} /> : <Heldout />}
     </div>
   );
@@ -27,6 +29,7 @@ function Live({ models }: { models: Model[] }) {
   const [res, setRes] = useState<Record<string, { pred: Pred; ms: number }> | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  useEffect(() => setRes(null), [image?.id]);
   const run = async () => {
     if (!image) return;
     setBusy(true); setErr("");
@@ -34,32 +37,35 @@ function Live({ models }: { models: Model[] }) {
   };
   const spatial = skill === "detect" || skill === "point";
   const pa = res?.[a]?.pred ?? null, pb = res?.[b]?.pred ?? null;
+  const H = "calc(100vh - 260px)";
+  const src = image ? api.imageUrl(image.id, 2048) : "";
   return (
     <div className="grid3">
       <aside className="card"><ImagePicker value={image?.id ?? null} onPick={setImage} /></aside>
-      <section className="col">
+      <section className="col" style={{ minWidth: 0 }}>
         {image && res && spatial && (
           <div className="grid2">
-            <div><div className="muted">{lbl(a)} · {summary(pa)} · {res[a].ms} ms</div><Canvas src={api.imageUrl(image.id)} skill={skill} value={pa} alt={pb} readOnly labels={{ main: lbl(a), alt: lbl(b) }} /></div>
-            <div><div className="muted">{lbl(b)} · {summary(pb)} · {res[b].ms} ms</div><Canvas src={api.imageUrl(image.id)} skill={skill} value={pb} alt={pa} readOnly labels={{ main: lbl(b), alt: lbl(a) }} /></div>
+            <div><div className="muted hint">{lbl(a)} · {summary(pa)} · {res[a].ms} ms</div><Canvas src={src} skill={skill} value={pa} alt={pb} readOnly labels={{ main: lbl(a), alt: lbl(b) }} height={H} /></div>
+            <div><div className="muted hint">{lbl(b)} · {summary(pb)} · {res[b].ms} ms</div><Canvas src={src} skill={skill} value={pb} alt={pa} readOnly labels={{ main: lbl(b), alt: lbl(a) }} height={H} /></div>
           </div>
         )}
         {image && res && !spatial && (
           <div className="grid2">
-            <div className="card"><div className="muted">{lbl(a)} · {res[a].ms} ms</div><p>{pa?.text}</p></div>
-            <div className="card"><div className="muted">{lbl(b)} · {res[b].ms} ms（相對 {lbl(a)} 的差異）</div><TextDiff a={pa?.text ?? ""} b={pb?.text ?? ""} /></div>
+            <div className="card"><div className="muted hint">{lbl(a)} · {res[a].ms} ms</div><p>{pa?.text}</p></div>
+            <div className="card"><div className="muted hint">{lbl(b)} · {res[b].ms} ms（相對 {lbl(a)} 的差異）</div><TextDiff a={pa?.text ?? ""} b={pb?.text ?? ""} /></div>
           </div>
         )}
-        {image && !res && <Canvas src={api.imageUrl(image.id)} skill={skill} value={null} readOnly />}
-        {!image && <div className="card muted">左側選一張圖。</div>}
+        {image && !res && <Canvas src={src} skill={skill} value={null} readOnly height={H} />}
+        {!image && <div className="empty">左側選一張圖。</div>}
       </section>
       <aside className="card col">
-        <div className="tabs">{(["detect", "point", "query", "caption"] as Skill[]).map((s) => <button key={s} className={s === skill ? "cur" : ""} onClick={() => { setSkill(s); setRes(null); setPrompt(s === "query" ? "How many people are there?" : s === "caption" ? "normal" : "person"); }}>{skillLabel[s]}</button>)}</div>
-        <label>{promptLabel(skill)}<input value={prompt} onChange={(e) => setPrompt(e.target.value)} style={{ width: "100%" }} /></label>
-        <label>模型 A<select value={a} onChange={(e) => setA(e.target.value)} style={{ width: "100%" }}>{models.map((m) => <option key={m.name} value={m.name}>{m.label}</option>)}</select></label>
-        <label>模型 B<select value={b} onChange={(e) => setB(e.target.value)} style={{ width: "100%" }}>{models.map((m) => <option key={m.name} value={m.name}>{m.label}</option>)}</select></label>
-        <button className="primary" onClick={run} disabled={!image || busy}>{busy ? "…" : "兩個都跑"}</button>
-        {err && <div className="bad">{err}</div>}
+        {models.length < 2 && <div className="warn hint">還沒有任何 adapter（runs/ 是空的），現在只能 base 對 base。</div>}
+        <div className="tabs">{(["detect", "point", "query", "caption"] as Skill[]).map((s) => <button key={s} className={s === skill ? "cur" : ""} onClick={() => { setSkill(s); setRes(null); setPrompt(defaultPrompt(s)); }}>{skillLabel[s]}</button>)}</div>
+        <label className="f">{promptLabel(skill)}<input value={prompt} onChange={(e) => setPrompt(e.target.value)} /></label>
+        <label className="f">模型 A<select value={a} onChange={(e) => setA(e.target.value)}>{models.map((m) => <option key={m.name} value={m.name}>{m.label}</option>)}</select></label>
+        <label className="f">模型 B<select value={b} onChange={(e) => setB(e.target.value)}>{models.map((m) => <option key={m.name} value={m.name}>{m.label}</option>)}</select></label>
+        <button className="primary" onClick={run} disabled={!image || busy}>{busy ? "執行中…" : "兩個都跑"}</button>
+        {err && <div className="bad hint">{err}</div>}
       </aside>
     </div>
   );
@@ -83,36 +89,38 @@ function Heldout() {
   const gt = (row: HeldoutPair["row"]): Pred | null => row.skill === "detect" ? { boxes: row.boxes ?? [] } : row.skill === "point" ? { points: row.points ?? [] } : null;
   const asPred = (skill: Skill, v: unknown): Pred => skill === "detect" ? { boxes: v as number[][] } : skill === "point" ? { points: v as number[][] } : { text: String(v ?? "") };
   const rb = reports.find((r) => r.path === base), ra = reports.find((r) => r.path === adapter);
+  const H = "calc(100vh - 300px)";
+  if (!reports.length) return <div className="empty">還沒有 eval 報告。先跑 <code>forge eval heldout-cctv</code>（base）和 <code>forge eval heldout-cctv --adapter runs/…/x.pt</code>，報告會出現在這裡。{err && <div className="bad">{err}</div>}</div>;
   return (
     <div className="col">
       <div className="card row">
-        <label>Base 報告 <select value={base} onChange={(e) => setBase(e.target.value)}><option value="">—</option>{reports.map((r) => <option key={r.path} value={r.path}>{short(r)}</option>)}</select></label>
-        <label>Adapter 報告 <select value={adapter} onChange={(e) => setAdapter(e.target.value)}><option value="">—</option>{reports.filter((r) => !base || r.manifest === rb?.manifest).map((r) => <option key={r.path} value={r.path}>{short(r)}</option>)}</select></label>
-        <label><input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} /> 只看分數變動的題</label>
+        <label className="row">Base 報告 <select value={base} onChange={(e) => setBase(e.target.value)}><option value="">—</option>{reports.map((r) => <option key={r.path} value={r.path}>{short(r)}</option>)}</select></label>
+        <label className="row">Adapter 報告 <select value={adapter} onChange={(e) => setAdapter(e.target.value)}><option value="">—</option>{reports.filter((r) => !base || r.manifest === rb?.manifest).map((r) => <option key={r.path} value={r.path}>{short(r)}</option>)}</select></label>
+        <label className="row"><input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} /> 只看分數變動的題</label>
         <button className="primary" onClick={load} disabled={!base || !adapter}>載入</button>
-        {rb && ra && <span className="muted">macro：{Object.keys(rb.macro).map((k) => `${k} ${rb.macro[k].toFixed(3)} → ${(ra.macro[k] ?? NaN).toFixed(3)}`).join(" · ")}</span>}
+        {rb && ra && <span className="muted hint">macro：{Object.keys(rb.macro).map((k) => `${k.split("/")[0]} ${rb.macro[k].toFixed(3)} → ${(ra.macro[k] ?? NaN).toFixed(3)}`).join(" · ")}</span>}
         {err && <span className="bad">{err}</span>}
       </div>
       {pairs && (
         <div className="grid3">
-          <aside className="card"><div className="muted">{pairs.length} / {n} 題</div>
-            <div className="list">{pairs.map((q, i) => <div key={i} className={`it${i === cur ? " cur" : ""}`} onClick={() => setCur(i)}>{i + 1}. {q.row.skill} {q.row.object ?? q.row.question} <span className={better(q) ? "ok" : "bad"}>{score(q.base)} → {score(q.adapter)}</span></div>)}</div>
+          <aside className="card"><div className="muted hint">{pairs.length} / {n} 題</div>
+            <div className="list" style={{ maxHeight: "calc(100vh - 260px)" }}>{pairs.map((q, i) => <div key={i} className={`it${i === cur ? " cur" : ""}`} onClick={() => setCur(i)}>{i + 1}. {q.row.skill} {q.row.object ?? q.row.question} <span className={better(q) ? "ok" : "bad"}>{score(q.base)} → {score(q.adapter)}</span></div>)}</div>
           </aside>
-          <section>
+          <section style={{ minWidth: 0 }}>
             {p && (p.row.skill === "detect" || p.row.skill === "point") && (
               <div className="grid2">
-                <div><div className="muted">base（實線）vs GT（虛線）· {score(p.base)}</div><Canvas src={api.imageUrl(p.image_id)} skill={p.row.skill} value={asPred(p.row.skill, p.base.pred)} alt={gt(p.row)} readOnly labels={{ main: "base", alt: "GT" }} /></div>
-                <div><div className="muted">adapter（實線）vs GT（虛線）· {score(p.adapter)}</div><Canvas src={api.imageUrl(p.image_id)} skill={p.row.skill} value={asPred(p.row.skill, p.adapter.pred)} alt={gt(p.row)} readOnly labels={{ main: "adapter", alt: "GT" }} /></div>
+                <div><div className="muted hint">base（實線）vs GT（虛線）· {score(p.base)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.base.pred)} alt={gt(p.row)} readOnly labels={{ main: "base", alt: "GT" }} height={H} /></div>
+                <div><div className="muted hint">adapter（實線）vs GT（虛線）· {score(p.adapter)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.adapter.pred)} alt={gt(p.row)} readOnly labels={{ main: "adapter", alt: "GT" }} height={H} /></div>
               </div>
             )}
             {p && p.row.skill !== "detect" && p.row.skill !== "point" && (
               <div className="grid2">
-                <div><Canvas src={api.imageUrl(p.image_id)} skill="query" value={null} readOnly /></div>
+                <div><Canvas src={api.imageUrl(p.image_id, 2048)} skill="query" value={null} readOnly height={H} /></div>
                 <div className="card col"><div><strong>{p.row.question}</strong> · GT：{p.row.answer}</div><div>base：{String(p.base.pred)} {p.base.ok ? "✓" : "✗"}</div><div>adapter：{String(p.adapter.pred)} {p.adapter.ok ? "✓" : "✗"}</div></div>
               </div>
             )}
           </section>
-          <aside className="card muted">tp/fp/fn（框、點）或 ✓/✗（問答）。綠＝adapter 比 base 好。</aside>
+          <aside className="card muted hint">tp/fp/fn（框、點）或 ✓/✗（問答）。綠＝adapter 比 base 好。</aside>
         </div>
       )}
     </div>

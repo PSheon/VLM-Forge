@@ -27,6 +27,7 @@ class Engine:
         self.base_head = None
         self.current = "base"
         self.adapters: dict[str, dict] = {}
+        self.judge = None  # the Qwen3-VL judge, loaded on first use (GOALS §6)
         self.q: queue.Queue = queue.Queue()
         self.loaded_at: float | None = None
         self.busy = False
@@ -42,12 +43,33 @@ class Engine:
 
         from ..model import Moondream
 
+        if not Path(self.weights).exists():
+            raise FileNotFoundError(
+                f"model weights not found: {self.weights} (copy them from the PRO 6000, GOALS §3)"
+            )
         t0 = time.time()
         self.model = Moondream(self.weights, self.tokenizer, batch_size=self.batch_size)
         self.base_head = {k: v.clone() for k, v in self.model.region.head_state_dict().items()}
         torch.cuda.empty_cache()
         self.loaded_at = time.time()
         print(f"engine: model loaded in {self.loaded_at - t0:.0f}s", flush=True)
+
+    def _load_judge(self):
+        from ..judge import Judge
+
+        if not Path(paths.JUDGE_MODEL).exists():
+            raise FileNotFoundError(f"judge model not found: {paths.JUDGE_MODEL}")
+        t0 = time.time()
+        self.judge = Judge(paths.JUDGE_MODEL)
+        print(f"engine: judge loaded in {time.time() - t0:.0f}s", flush=True)
+
+    def judge_items(self, items: list[dict]) -> list[dict]:
+        """Verdicts for ``items`` (``path``, ``skill``, ``prompt``, ``pred``), on the worker."""
+
+        def run(j):
+            return [j.judge(it["path"], it["skill"], it["prompt"], it["pred"]) for it in items]
+
+        return self.submit(run, "judge").result()
 
     def _use(self, name: str):
         if name == self.current:
@@ -73,6 +95,11 @@ class Engine:
                 continue
             self.busy = True
             try:
+                if model_name == "judge":
+                    if self.judge is None:
+                        self._load_judge()
+                    fut.set_result(fn(self.judge))
+                    continue
                 if self.model is None:
                     self._load()
                 self._use(model_name)
@@ -103,6 +130,11 @@ class Engine:
             pass
         return {
             "loaded": self.model is not None,
+            "weights": str(self.weights),
+            "weights_ok": Path(self.weights).exists(),
+            "judge": str(paths.JUDGE_MODEL),
+            "judge_ok": Path(paths.JUDGE_MODEL).exists(),
+            "judge_loaded": self.judge is not None,
             "current": self.current,
             "adapters_loaded": sorted(self.adapters),
             "pending": self.pending(),

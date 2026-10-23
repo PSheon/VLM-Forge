@@ -29,6 +29,17 @@ class StubEngine:
             return [{"points": [[0.5, 0.5]]} for _ in images]
         return [{"text": f"{model}: 2"} for _ in images]
 
+    def judge_items(self, items):
+        # "shelf" items are flagged, everything else accepted
+        return [
+            {
+                "verdict": "fix" if it["prompt"] == "shelf" else "accept",
+                "note": "stub",
+                "model": "stub",
+            }
+            for it in items
+        ]
+
 
 def png_bytes(color):
     buf = io.BytesIO()
@@ -91,6 +102,7 @@ def test_queue_claim_review_export(client):
             "skill": "detect",
             "prompts": ["person", "shelf"],
             "image_ids": ids,
+            "judge": False,
         },
     ).json()
     assert q["total"] == 6
@@ -117,12 +129,50 @@ def test_queue_claim_review_export(client):
     assert nxt["id"] not in (a["id"], b["id"])
     client.post(f"/api/items/{nxt['id']}/review", json={"action": "discard", "reviewer": "A"})
     counts = client.get(f"/api/queues/{q['id']}").json()["counts"]
-    assert counts == {"pending": 3, "approved": 1, "corrected": 1, "discarded": 1}
+    assert counts == {"pending": 3, "auto": 0, "approved": 1, "corrected": 1, "discarded": 1}
     ex = client.post("/api/export", json={"name": "cctv-1", "incoming": True}).json()
     assert ex["train"]["rows"] == 2 and ex["train"]["skills"] == {"detect": 2}
     assert ex["incoming"]["items"] == 2 and ex["incoming"]["images"] == 1  # a, b: same image
     bad = client.post(f"/api/items/{a['id']}/review", json={"action": "correct", "reviewer": "A"})
     assert bad.status_code == 422
+
+
+def test_judge_triage(client, monkeypatch):
+    from vlmforge.server import workspace as wsmod
+
+    monkeypatch.setattr(wsmod, "SPOT_MIN", 1)
+    ids = [
+        client.post("/api/images", files={"file": (f"{c}.png", png_bytes(c), "image/png")}).json()[
+            "id"
+        ]
+        for c in ("red", "green", "blue", "white")
+    ]
+    q = client.post(
+        "/api/queues",
+        json={"name": "j", "skill": "detect", "prompts": ["person", "shelf"], "image_ids": ids},
+    ).json()
+    for _ in range(100):
+        q = client.get(f"/api/queues/{q['id']}").json()
+        if q["job"]["state"] == "done":
+            break
+        time.sleep(0.02)
+    assert q["job"]["state"] == "done", q["job"]
+    # 4 person items accepted: 1 spot-checked stays pending, 3 go auto; 4 shelf items flagged
+    assert q["verdicts"] == {"accept": 4, "fix": 4} and q["spot"] == 1
+    assert q["counts"]["auto"] == 3 and q["counts"]["pending"] == 5
+    # flagged items come first for the human, then the spot sample
+    first = client.get(f"/api/queues/{q['id']}/next", params={"reviewer": "A"}).json()
+    assert first["prompt"] == "shelf" and first["judge"]["verdict"] == "fix"
+    # export: auto items are machine_reviewed with the prediction as label
+    rows = client.ws.reviewed_rows([q["id"]])
+    assert len(rows) == 3 and {r["label_origin"] for r in rows} == {"machine_reviewed"}
+    assert rows[0]["boxes"] == [[0.25, 0.25, 0.75, 0.75]] and rows[0]["reviewer"] == "judge:stub"
+    # a single judge call from the workbench
+    v = client.post(
+        "/api/judge",
+        json={"image_id": ids[0], "skill": "detect", "prompt": "shelf", "pred": {"boxes": []}},
+    ).json()
+    assert v["verdict"] == "fix"
 
 
 def test_compare_and_status(client):

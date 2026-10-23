@@ -9,6 +9,8 @@ An item is one (image, skill, prompt) with the model's prediction and, once revi
 human label:
 
     status   pending -> approved | corrected | discarded      (claimed_by / claimed_at while open)
+             auto = the judge accepted it and it is not in the spot-check sample: no human
+    verdict  the judge's accept | fix (``judge`` holds its JSON); spot = 1 marks the sample
     pred     {"boxes": [[x0,y0,x1,y1]]} | {"points": [[x,y]]} | {"text": "..."}   normalised 0-1
     label    same shape as pred, the human's final answer (approved = pred)
 """
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import sqlite3
 import threading
 import time
@@ -27,7 +30,15 @@ from PIL import Image
 
 CLAIM_MINUTES = 10
 SKILLS = ("detect", "point", "query", "caption")
-STATUSES = ("pending", "approved", "corrected", "discarded")
+STATUSES = ("pending", "auto", "approved", "corrected", "discarded")
+SPOT_FRAC, SPOT_MIN = 0.1, 20  # judge-accepted items a human still sees (per queue)
+# columns added after the first schema; (table, column, type) applied with ALTER TABLE
+MIGRATIONS = (
+    ("items", "judge", "text"),
+    ("items", "verdict", "text"),
+    ("items", "spot", "integer not null default 0"),
+    ("queues", "judge", "text not null default ''"),
+)
 
 SCHEMA = """
 create table if not exists images (
@@ -83,10 +94,30 @@ class Workspace:
         self.root = Path(root)
         self.images_dir = self.root / "images"
         self.images_dir.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.root / "forge.sqlite", check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
+        self._path = self.root / "forge.sqlite"
+        self._local = threading.local()  # one connection per thread (FastAPI's thread pool)
         self.db.executescript(SCHEMA)
+        for table, col, typ in MIGRATIONS:
+            have = {r["name"] for r in self.db.execute(f"pragma table_info({table})")}
+            if col not in have:
+                self.db.execute(f"alter table {table} add column {col} {typ}")
+        self.db.commit()
         self.lock = threading.Lock()
+
+    @property
+    def db(self) -> sqlite3.Connection:
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(self._path, check_same_thread=False, timeout=30)
+            c.row_factory = sqlite3.Row
+            self._local.conn = c
+        return c
+
+    def sources(self) -> list[dict]:
+        rows = self.db.execute(
+            "select source, count(*) n from images group by source order by source"
+        ).fetchall()
+        return [{"source": r["source"], "n": r["n"]} for r in rows]
 
     # ------------------------------------------------------------------ images
     def add_image_bytes(self, data: bytes, source: str = "upload", ext: str = "jpg") -> dict:
@@ -124,13 +155,17 @@ class Workspace:
         return [dict(r) for r in self.db.execute(q, [*args, limit])]
 
     # ------------------------------------------------------------------ queues
-    def create_queue(self, name: str, skill: str, model: str, note: str = "") -> dict:
+    def create_queue(
+        self, name: str, skill: str, model: str, note: str = "", judge: str = ""
+    ) -> dict:
+        """``judge``: the judge model's name, or '' when every item goes to a human."""
         if skill not in SKILLS:
             raise ValueError(f"unknown skill {skill!r}")
         with self.lock:
             self.db.execute(
-                "insert into queues (name, skill, model, created_at, note) values (?, ?, ?, ?, ?)",
-                (name, skill, model, now(), note),
+                "insert into queues (name, skill, model, created_at, note, judge)"
+                " values (?, ?, ?, ?, ?, ?)",
+                (name, skill, model, now(), note, judge),
             )
             self.db.commit()
         return self.queue_by_name(name)
@@ -154,6 +189,15 @@ class Workspace:
         ).fetchall()
         q["counts"] = {s: 0 for s in STATUSES} | {r["status"]: r["n"] for r in counts}
         q["total"] = sum(q["counts"].values())
+        verdicts = self.db.execute(
+            "select coalesce(verdict, 'none') v, count(*) n from items where queue_id = ?"
+            " group by v",
+            (q["id"],),
+        ).fetchall()
+        q["verdicts"] = {r["v"]: r["n"] for r in verdicts}
+        q["spot"] = self.db.execute(
+            "select count(*) from items where queue_id = ? and spot = 1", (q["id"],)
+        ).fetchone()[0]
         return q
 
     def queues(self) -> list[dict]:
@@ -195,6 +239,43 @@ class Workspace:
             )
             self.db.commit()
 
+    def set_judge(self, item_id: int, judge: dict) -> None:
+        with self.lock:
+            self.db.execute(
+                "update items set judge = ?, verdict = ? where id = ?",
+                (json.dumps(judge, ensure_ascii=False), judge.get("verdict"), item_id),
+            )
+            self.db.commit()
+
+    def unjudged(self, queue_id: int) -> list[dict]:
+        return [
+            it
+            for it in self.items(queue_id, "pending")
+            if it["pred"] is not None and not it["verdict"]
+        ]
+
+    def triage(self, queue_id: int, seed: int = 0) -> dict:
+        """After judging: accepted items leave the human queue (status ``auto``) except a
+        random spot-check sample of max(SPOT_MIN, SPOT_FRAC) that stays ``pending`` with
+        ``spot = 1``; ``fix`` items stay pending. Items a human already touched are left alone."""
+        accepted = [it["id"] for it in self.items(queue_id, "pending") if it["verdict"] == "accept"]
+        rng = random.Random(seed)
+        rng.shuffle(accepted)
+        k = min(len(accepted), max(SPOT_MIN, round(SPOT_FRAC * len(accepted))))
+        spot, auto = accepted[:k], accepted[k:]
+        with self.lock:
+            if spot:
+                self.db.execute(
+                    f"update items set spot = 1 where id in ({','.join('?' * len(spot))})", spot
+                )
+            if auto:
+                self.db.execute(
+                    f"update items set status = 'auto' where id in ({','.join('?' * len(auto))})",
+                    auto,
+                )
+            self.db.commit()
+        return {"accepted": len(accepted), "spot": len(spot), "auto": len(auto)}
+
     def item(self, item_id: int) -> dict | None:
         row = self.db.execute(
             "select items.*, images.path, images.width, images.height, images.source"
@@ -207,6 +288,7 @@ class Workspace:
         it = dict(row)
         it["pred"] = json.loads(it["pred"]) if it["pred"] else None
         it["label"] = json.loads(it["label"]) if it["label"] else None
+        it["judge"] = json.loads(it["judge"]) if it.get("judge") else None
         return it
 
     def items(self, queue_id: int, status: str | None = None, limit: int = 2000) -> list[dict]:
@@ -222,7 +304,8 @@ class Workspace:
         return [self._item(r) for r in self.db.execute(q, [*args, limit])]
 
     def claim_next(self, queue_id: int, reviewer: str, after: int | None = None) -> dict | None:
-        """The next pending item nobody else holds (claims expire after CLAIM_MINUTES)."""
+        """The next pending item nobody else holds (claims expire after CLAIM_MINUTES): the
+        judge's ``fix`` items first, then the spot-check sample, then unjudged ones."""
         with self.lock:
             cutoff = time.time() - CLAIM_MINUTES * 60
             q = (
@@ -233,7 +316,11 @@ class Workspace:
             if after is not None:
                 q += " and id > ?"
                 args.append(after)
-            row = self.db.execute(q + " order by id limit 1", args).fetchone()
+            order = (
+                " order by case when verdict = 'fix' then 0 when spot = 1 then 1 else 2 end,"
+                " id limit 1"
+            )
+            row = self.db.execute(q + order, args).fetchone()
             if row is None:
                 return None
             self.db.execute(
@@ -286,11 +373,12 @@ class Workspace:
 
     # ------------------------------------------------------------------ export
     def reviewed_rows(self, queue_ids: list[int] | None = None) -> list[dict]:
-        """Training / eval rows (``vlmforge.data`` format) from approved + corrected items."""
+        """Training / eval rows (``vlmforge.data`` format): human-reviewed items (``human``)
+        and judge-accepted ones (``machine_reviewed``)."""
         q = (
             "select items.*, images.path, images.width, images.height, images.source"
             " from items join images on images.id = items.image_id"
-            " where status in ('approved', 'corrected')"
+            " where status in ('approved', 'corrected', 'auto')"
         )
         args: list = []
         if queue_ids:
@@ -304,19 +392,23 @@ class Workspace:
 
 
 def item_row(it: dict) -> dict:
-    """One reviewed item -> a training / eval row."""
+    """One reviewed item -> a training / eval row. A human's verdict is ``human``; a
+    judge-accepted item nobody looked at is ``machine_reviewed`` (rules §6)."""
+    auto = it["status"] == "auto"
+    judge = it.get("judge") or {}
     base = {
         "image": it["path"],
         "source": it["source"],
         "id": f"forge/{it['id']}",
         "skill": it["skill"],
-        "label_origin": "human",
-        "reviewer": it["reviewer"],
+        "label_origin": "machine_reviewed" if auto else "human",
+        "reviewer": f"judge:{judge.get('model', '?')}" if auto else it["reviewer"],
         "date": (it["reviewed_at"] or "")[:10],
         "prefill": it["pred_model"],
         "changed": it["status"] == "corrected",
+        "judge": it.get("verdict"),
     }
-    lab = it["label"] or {}
+    lab = (it["pred"] if auto else it["label"]) or {}
     if it["skill"] == "detect":
         return {**base, "object": it["prompt"], "boxes": lab.get("boxes", [])}
     if it["skill"] == "point":

@@ -21,7 +21,10 @@ export interface Item {
   pred: Pred | null;
   pred_model: string | null;
   label: Pred | null;
-  status: "pending" | "approved" | "corrected" | "discarded";
+  judge: JudgeVerdict | null;
+  verdict: "accept" | "fix" | null;
+  spot: number;
+  status: "pending" | "auto" | "approved" | "corrected" | "discarded";
   reviewer: string | null;
   reviewed_at: string | null;
   path: string;
@@ -30,16 +33,30 @@ export interface Item {
   source: string;
 }
 
+export interface JudgeVerdict {
+  verdict: "accept" | "fix";
+  note: string;
+  model?: string;
+  wrong?: number[];
+  missed?: number;
+  answer?: string;
+  unsupported?: string[];
+  raw?: string;
+}
+
 export interface Queue {
   id: number;
   name: string;
   skill: Skill;
   model: string;
+  judge: string;
   note: string;
   created_at: string;
   counts: Record<string, number>;
+  verdicts: Record<string, number>;
+  spot: number;
   total: number;
-  job?: { state: string; done: number; total: number; error: string | null } | null;
+  job?: { state: string; phase?: string; done: number; total: number; error: string | null; triage?: Record<string, number> } | null;
 }
 
 export interface Model {
@@ -65,13 +82,33 @@ export interface Report {
   macro: Record<string, number>;
 }
 
+export interface EngineStatus {
+  loaded: boolean;
+  weights: string;
+  weights_ok: boolean;
+  judge: string;
+  judge_ok: boolean;
+  judge_loaded: boolean;
+  current: string;
+  pending: number;
+  busy: boolean;
+  gpu_mem_gb: number | null;
+  last_error: string | null;
+}
+
+export interface Status {
+  version: string;
+  engine: EngineStatus;
+  models: Model[];
+}
+
 async function j<T>(res: Promise<Response>): Promise<T> {
   const r = await res;
   if (!r.ok) {
-    let msg = `${r.status}`;
+    let msg = `HTTP ${r.status}`;
     try {
       const b = await r.json();
-      msg = b.detail ? JSON.stringify(b.detail) : msg;
+      if (b.detail) msg = typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail);
     } catch {
       /* ignore */
     }
@@ -84,21 +121,25 @@ const post = (url: string, body: unknown) =>
   fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export const api = {
-  status: () => j<{ version: string; engine: Record<string, unknown>; models: Model[] }>(fetch("/api/status")),
+  status: () => j<Status>(fetch("/api/status")),
   models: () => j<Model[]>(fetch("/api/models")),
-  images: (source?: string) => j<ImageRow[]>(fetch(`/api/images${source ? `?source=${encodeURIComponent(source)}` : ""}`)),
+  images: (source?: string) => j<ImageRow[]>(fetch(`/api/images?limit=2000${source ? `&source=${encodeURIComponent(source)}` : ""}`)),
+  sources: () => j<{ source: string; n: number }[]>(fetch("/api/sources")),
   upload: (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
     return j<ImageRow>(fetch("/api/images", { method: "POST", body: fd }));
   },
   scan: (dir: string, source: string) => j<{ added: number }>(post("/api/images/scan", { dir, source })),
-  imageUrl: (id: string) => `/api/images/${id}/file`,
+  imageUrl: (id: string, w?: number) => `/api/images/${id}/file${w ? `?w=${w}` : ""}`,
   infer: (image_id: string, skill: Skill, prompt: string, model: string) =>
     j<{ pred: Pred; model: string; ms: number }>(post("/api/infer", { image_id, skill, prompt, model })),
   compare: (image_id: string, skill: Skill, prompt: string, models: string[]) =>
     j<Record<string, { pred: Pred; ms: number }>>(post("/api/compare", { image_id, skill, prompt, models })),
   saveItem: (body: Record<string, unknown>) => j<Item>(post("/api/items", body)),
+  judge: (image_id: string, skill: Skill, prompt: string, pred: Pred) =>
+    j<JudgeVerdict & { ms: number }>(post("/api/judge", { image_id, skill, prompt, pred })),
+  judgeQueue: (id: number) => j<Queue>(post(`/api/queues/${id}/judge`, {})),
   queues: () => j<Queue[]>(fetch("/api/queues")),
   queue: (id: number) => j<Queue>(fetch(`/api/queues/${id}`)),
   createQueue: (body: Record<string, unknown>) => j<Queue>(post("/api/queues", body)),
@@ -137,12 +178,41 @@ export const reviewerStore = {
 };
 
 export const skillLabel: Record<Skill, string> = {
-  detect: "Detect 框",
-  point: "Point 點",
-  query: "Query 問答",
-  caption: "Caption 描述",
+  detect: "Detect",
+  point: "Point",
+  query: "Query",
+  caption: "Caption",
 };
 
 export function promptLabel(skill: Skill): string {
   return skill === "query" ? "問題" : skill === "caption" ? "長度 (short / normal / long)" : "物件名稱";
 }
+
+export function defaultPrompt(skill: Skill): string {
+  return skill === "query" ? "How many people are there?" : skill === "caption" ? "normal" : "person";
+}
+
+export function emptyLabel(skill: Skill): Pred {
+  return skill === "detect" ? { boxes: [] } : skill === "point" ? { points: [] } : { text: "" };
+}
+
+export function summary(p: Pred | null | undefined): string {
+  if (!p) return "—";
+  if (p.boxes) return `${p.boxes.length} 框`;
+  if (p.points) return `${p.points.length} 點`;
+  return p.text ? `"${p.text.slice(0, 60)}${p.text.length > 60 ? "…" : ""}"` : "(空)";
+}
+
+export function judgeText(v: JudgeVerdict | null | undefined): string {
+  if (!v) return "";
+  const parts: string[] = [];
+  if (v.wrong?.length) parts.push(`框/點 ${v.wrong.join(", ")} 不對`);
+  if (v.missed) parts.push(`漏 ${v.missed} 個`);
+  if (v.answer && v.verdict === "fix") parts.push(`judge 認為答案是「${v.answer}」`);
+  if (v.unsupported?.length) parts.push(`圖裡沒有：${v.unsupported.join("、")}`);
+  if (v.note) parts.push(v.note);
+  return parts.join("；");
+}
+
+export const sourceLabel = (s: string) =>
+  s === "upload" ? "上傳" : s === "heldout" ? "held-out（只能評估）" : s.startsWith("capture") ? `擷取 ${s.slice(8)}` : s;

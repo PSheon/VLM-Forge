@@ -7,7 +7,7 @@ VLM-Forge 的唯一目標、範圍與規格。與程式、其他文件或其他 
 
 VLM-Forge 是 **Moondream 3.1 微調的唯一家**：detect / point / query / caption 四種 skill 的 LoRA 微調、評估、以及讓人監督與修正模型輸出的 UI，整套工具鏈自給自足。
 
-動機：①把 3.1 的輸出變成我們資料的飛輪（模型預標 → 人修 → 回 Data Core）；②量「3.1 底子 + 我們的資料」的上限；③給 SyncVision 更強的 teacher。
+動機：①把 3.1 的輸出變成我們資料的飛輪（模型預標 → **judge 自動審** → 人只看被標紅的和抽查樣本 → 回 Data Core）；②量「3.1 底子 + 我們的資料」的上限；③給 SyncVision 更強的 teacher。
 
 不在範圍：SyncVision（自訓模型，在 SyncAI-Lib-VisionTraining_Exp）；playground 的推論展示（SyncAI-App-VLMPlayground_Exp）。playground 的 `training/` 已搬到本 repo，playground 本身在 v1 不動、不加 adapter 切換。
 
@@ -51,6 +51,7 @@ VLM-Forge 是 **Moondream 3.1 微調的唯一家**：detect / point / query / ca
 
 - 技術：FastAPI + Vite/React（TypeScript），推論後端是 §3 的純 PyTorch 移植。
 - 部署：GB300 內網 **:8796**，不做登入；每筆修正記 reviewer 名字與時間；多人同審，每張圖認領後鎖 10 分鐘。
+- **Judge（人類監督的前一層）**：佇列預測完後由本機的 **Qwen3-VL-32B-Instruct**（Apache-2.0，`model-cache/judge`，與 VisionTraining caption 抽審同一個模型）逐題審：detect/point 看畫了編號框的圖，回報錯框與漏框；query 判答案對錯；caption 列出圖裡不存在的片語。`accept` 的題離開人工佇列（status `auto`），只留 **max(20, 10%) 的抽查樣本**給人；`fix` 的題排在人工佇列最前面。Judge 永遠不寫 label：`auto` 匯出為 `machine_reviewed`（Data Core §7 的正式抽審在登錄時做），人審過的為 `human`。
 - v1 四塊：
   1. **工作台**：選圖或上傳 → 選 skill 與模型（base 或任一 adapter）→ 直接拖框、移點、改文字 → 存成 gold 或訓練樣本。
   2. **審核佇列**：對一個資料集批次跑預測，人逐張通過／修正／丟棄，鍵盤快捷鍵。

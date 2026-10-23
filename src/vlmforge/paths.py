@@ -14,6 +14,9 @@ MODEL_CACHE = Path(os.environ.get("VLMFORGE_MODEL_CACHE", ROOT / "model-cache" /
 WEIGHTS = MODEL_CACHE / "weights" / "model.safetensors"
 TOKENIZER = MODEL_CACHE / "tokenizer"
 
+# the judge (GOALS §6): a symlink to the local Qwen3-VL-32B-Instruct directory
+JUDGE_MODEL = Path(os.environ.get("VLMFORGE_JUDGE_MODEL", ROOT / "model-cache" / "judge"))
+
 RUNS = ROOT / "runs"
 BASELINES = RUNS / "baselines"
 ADAPTERS = ROOT / "adapters"

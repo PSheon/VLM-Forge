@@ -2,12 +2,12 @@
 // macro scores from eval reports, and which adapter the GPU worker currently holds.
 
 import { useEffect, useState } from "react";
-import { api, type Report, type Run } from "../api";
+import { api, type EngineStatus, type Report, type Run } from "../api";
 
 export default function Runs() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
-  const [engine, setEngine] = useState<Record<string, unknown>>({});
+  const [engine, setEngine] = useState<Partial<EngineStatus>>({});
   const [err, setErr] = useState("");
   const load = () => Promise.all([api.runs(), api.reports(), api.status()]).then(([r, p, s]) => { setRuns(r); setReports(p); setEngine(s.engine); }).catch((e) => setErr(String(e)));
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
@@ -15,14 +15,17 @@ export default function Runs() {
     <div className="col">
       <div className="card row">
         <strong>GPU worker</strong>
-        <span>模型 {engine.loaded ? "已載入" : "未載入"} · 目前 {String(engine.current ?? "—")} · 佇列 {String(engine.pending ?? 0)} · {String(engine.gpu_mem_gb ?? "?")} GB</span>
-        {engine.last_error ? <span className="bad">{String(engine.last_error)}</span> : null}
+        <span>模型 {engine.loaded ? "已載入" : "未載入"} · 目前 {String(engine.current ?? "—")} · 排隊 {String(engine.pending ?? 0)} · {String(engine.gpu_mem_gb ?? "?")} GB</span>
+        {!engine.weights_ok && <span className="warn hint">權重不在 {String(engine.weights)}</span>}
+        {engine.last_error ? <span className="bad hint">上次錯誤：{String(engine.last_error)}</span> : null}
         {err && <span className="bad">{err}</span>}
       </div>
       <div className="card">
-        <strong>Held-out 報告</strong>
-        <table><thead><tr><th>模型</th><th>suite</th><th>detect</th><th>point</th><th>query</th><th>caption</th></tr></thead>
-          <tbody>{reports.map((r) => <tr key={r.path}><td>{r.model}</td><td>{r.manifest?.split("/").pop()}</td>{["detect", "point", "query", "caption"].map((k) => <td key={k}>{fmt(r.macro[`${k}/macro`])}</td>)}</tr>)}</tbody></table>
+        <strong>Held-out 報告</strong> <span className="muted hint">（forge eval 的輸出；macro 分數）</span>
+        {reports.length === 0 ? <div className="muted hint">還沒有報告。</div> : (
+          <table><thead><tr><th>模型</th><th>suite</th><th>detect</th><th>point</th><th>query</th><th>caption</th></tr></thead>
+            <tbody>{reports.map((r) => <tr key={r.path}><td>{r.model}</td><td>{r.manifest?.split("/").pop()}</td>{["detect", "point", "query", "caption"].map((k) => <td key={k}>{fmt(r.macro[`${k}/macro`])}</td>)}</tr>)}</tbody></table>
+        )}
       </div>
       {runs.map((r) => (
         <div className="card" key={r.name}>
@@ -39,7 +42,7 @@ export default function Runs() {
           </div>
         </div>
       ))}
-      {!runs.length && <div className="card muted">還沒有訓練 run（runs/ 是空的）。</div>}
+      {!runs.length && <div className="empty">還沒有訓練 run。<code>forge train configs/….yaml</code> 開跑後會出現在這裡（loss 曲線、adapter、eval）。</div>}
     </div>
   );
 }

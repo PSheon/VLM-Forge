@@ -58,6 +58,14 @@ class QueueIn(BaseModel):
     image_ids: list[str] | None = None
     source: str | None = None
     note: str = ""
+    judge: bool = True
+
+
+class JudgeIn(BaseModel):
+    image_id: str
+    skill: str
+    prompt: str = ""
+    pred: dict
 
 
 class ReviewIn(BaseModel):
@@ -93,8 +101,10 @@ def list_runs() -> list[dict]:
     runs = []
     if not paths.RUNS.exists():
         return runs
-    for d in sorted(p for p in paths.RUNS.iterdir() if p.is_dir() and p.name != "baselines"):
+    for d in sorted(p for p in paths.RUNS.iterdir() if p.is_dir()):
         log = d / "log.jsonl"
+        if not (log.exists() or any(d.glob("*.pt")) or any(d.glob("*.json"))):
+            continue  # not a run (runs/logs, runs/baselines)
         last, steps = None, []
         if log.exists():
             for line in open(log):
@@ -196,6 +206,10 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     def images(source: str | None = None, limit: int = 500):
         return ws.images(source, limit)
 
+    @app.get("/api/sources")
+    def sources():
+        return ws.sources()
+
     @app.get("/api/images/{image_id}")
     def image(image_id: str):
         im = ws.image(image_id)
@@ -204,11 +218,24 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         return im
 
     @app.get("/api/images/{image_id}/file")
-    def image_file(image_id: str):
+    def image_file(image_id: str, w: int | None = None):
+        """The image, or a cached JPEG resized to width ``w`` (thumbnails, display copies of
+        the 2560 px CCTV frames) under workspace/cache/."""
         im = ws.image(image_id)
         if im is None or not Path(im["path"]).exists():
             raise HTTPException(404)
-        return FileResponse(im["path"])
+        if not w or w >= im["width"]:
+            return FileResponse(im["path"])
+        w = max(32, min(w, 4096))
+        cache = ws.root / "cache" / f"{image_id}-w{w}.jpg"
+        if not cache.exists():
+            from PIL import Image
+
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            img = Image.open(im["path"]).convert("RGB")
+            img.thumbnail((w, w * 4), Image.LANCZOS)
+            img.save(cache, "JPEG", quality=85)
+        return FileResponse(cache, headers={"Cache-Control": "max-age=86400"})
 
     # ------------------------------------------------------------------ inference
     def _infer(image_id: str, skill: str, prompt: str, model: str) -> dict:
@@ -218,7 +245,10 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         if skill not in SKILLS:
             raise HTTPException(422, f"unknown skill {skill}")
         t0 = time.time()
-        pred = engine.infer([im["path"]], skill, prompt, model)[0]
+        try:
+            pred = engine.infer([im["path"]], skill, prompt, model)[0]
+        except Exception as e:  # noqa: BLE001 - the worker's error, shown in the UI
+            raise HTTPException(503, f"{type(e).__name__}: {e}") from e
         return {"pred": pred, "model": model, "ms": round((time.time() - t0) * 1000)}
 
     @app.post("/api/infer")
@@ -228,6 +258,27 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     @app.post("/api/compare")
     def compare(body: CompareIn):
         return {m: _infer(body.image_id, body.skill, body.prompt, m) for m in body.models}
+
+    @app.post("/api/judge")
+    def judge_one(body: JudgeIn):
+        im = ws.image(body.image_id)
+        if im is None:
+            raise HTTPException(404, "no such image")
+        t0 = time.time()
+        try:
+            v = engine.judge_items(
+                [
+                    {
+                        "path": im["path"],
+                        "skill": body.skill,
+                        "prompt": body.prompt,
+                        "pred": body.pred,
+                    }
+                ]
+            )[0]
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(503, f"{type(e).__name__}: {e}") from e
+        return {**v, "ms": round((time.time() - t0) * 1000)}
 
     # ------------------------------------------------------------------ workbench save
     @app.post("/api/items")
@@ -241,7 +292,19 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             raise HTTPException(422, str(e)) from e
 
     # ------------------------------------------------------------------ queues
-    def _predict_queue(qid: int, model: str):
+    def _judge_queue(qid: int, job: dict):
+        """Judge every predicted, unjudged pending item, then triage (GOALS §6)."""
+        job["phase"] = "judging"
+        todo = ws.unjudged(qid)
+        job["total"], job["done"] = len(todo), 0
+        for i in range(0, len(todo), 8):
+            chunk = todo[i : i + 8]
+            for it, v in zip(chunk, engine.judge_items(chunk), strict=True):
+                ws.set_judge(it["id"], v)
+            job["done"] += len(chunk)
+        job["triage"] = ws.triage(qid)
+
+    def _predict_queue(qid: int, model: str, judge: bool):
         job = jobs[qid]
         try:
             items = ws.items(qid, "pending")
@@ -249,6 +312,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             for it in items:
                 if it["pred"] is None:
                     by_prompt.setdefault((it["skill"], it["prompt"]), []).append(it)
+            job["phase"] = "predicting"
             job["total"] = sum(len(v) for v in by_prompt.values())
             for (skill, prompt), its in by_prompt.items():
                 for i in range(0, len(its), 32):
@@ -257,10 +321,33 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                     for c, p in zip(chunk, preds, strict=True):
                         ws.set_pred(c["id"], p, model)
                     job["done"] += len(chunk)
+            if judge:
+                _judge_queue(qid, job)
             job["state"] = "done"
         except Exception as e:  # noqa: BLE001 - shown in the UI
             job["state"] = "error"
             job["error"] = f"{type(e).__name__}: {e}"
+
+    def _start(qid: int, target, *args):
+        jobs[qid] = {"state": "running", "phase": "", "done": 0, "total": 0, "error": None}
+        threading.Thread(target=target, args=(qid, *args), daemon=True).start()
+
+    @app.post("/api/queues/{qid}/judge")
+    def judge_queue(qid: int):
+        """(Re)run the judge on this queue's unjudged pending items."""
+        if jobs.get(qid, {}).get("state") == "running":
+            raise HTTPException(409, "job running")
+
+        def run(q):
+            job = jobs[q]
+            try:
+                _judge_queue(q, job)
+                job["state"] = "done"
+            except Exception as e:  # noqa: BLE001
+                job["state"], job["error"] = "error", f"{type(e).__name__}: {e}"
+
+        _start(qid, run)
+        return {**ws.queue(qid), "job": jobs[qid]}
 
     @app.post("/api/queues")
     def create_queue(body: QueueIn):
@@ -273,16 +360,16 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             ids = [im["id"] for im in ws.images(body.source, 100000)]
         if not ids:
             raise HTTPException(422, "no images")
+        judge = Path(paths.JUDGE_MODEL).name if body.judge else ""
         try:
-            q = ws.create_queue(body.name, body.skill, body.model, body.note)
+            q = ws.create_queue(body.name, body.skill, body.model, body.note, judge)
         except Exception as e:  # noqa: BLE001 - duplicate name
             raise HTTPException(409, f"queue exists? {e}") from e
         for image_id in ids:
             for prompt in body.prompts:
                 ws.add_item(image_id, body.skill, prompt, None, None, q["id"])
-        jobs[q["id"]] = {"state": "running", "done": 0, "total": 0, "error": None}
-        threading.Thread(target=_predict_queue, args=(q["id"], body.model), daemon=True).start()
-        return ws.queue(q["id"])
+        _start(q["id"], _predict_queue, body.model, body.judge)
+        return {**ws.queue(q["id"]), "job": jobs[q["id"]]}
 
     @app.get("/api/queues")
     def queues():
