@@ -124,6 +124,7 @@ export interface Run {
 
 export interface EngineStatus {
   loaded: boolean; weights: string; weights_ok: boolean; judge: string; judge_ok: boolean; judge_loaded: boolean;
+  judge_name?: string | null; judge_small_ok?: boolean; judge_need_gb?: number;
   current: string; pending: number; busy: boolean; gpu_mem_gb: number | null; gpu_free_gb?: number | null; last_error: string | null;
 }
 export interface Model { name: string; label: string }

@@ -148,11 +148,18 @@ class Judge:
     """Qwen3-VL through transformers; one image per generate (the judge is not the bottleneck,
     the human is)."""
 
-    def __init__(self, model_dir: str | Path, device: str = "cuda", max_new_tokens: int = 2048):
+    def __init__(
+        self,
+        model_dir: str | Path,
+        device: str = "cuda",
+        max_new_tokens: int = 2048,
+        name: str | None = None,
+    ):
         import torch
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         self.model_dir = str(model_dir)
+        self.name = name or Path(self.model_dir).resolve().name  # recorded on every verdict
         self.proc = AutoProcessor.from_pretrained(self.model_dir)
         self.model = AutoModelForImageTextToText.from_pretrained(
             self.model_dir, dtype=torch.bfloat16
@@ -220,7 +227,7 @@ class Judge:
         out = [parse_teacher(r) for r in raws]
         for t, r in zip(out, raws, strict=True):
             t["raw"] = r[:2000]
-            t["model"] = Path(self.model_dir).resolve().name
+            t["model"] = self.name
         self._ground(images, out)
         return out
 
@@ -239,7 +246,7 @@ class Judge:
         for raw_text in raws:
             t = parse_teacher(raw_text)
             t["raw"] = raw_text[:2000]
-            t["model"] = Path(self.model_dir).resolve().name
+            t["model"] = self.name
             out.append(t)
         self._ground(images, out)
         return out
@@ -269,6 +276,6 @@ class Judge:
         shown = render(image, pred) if skill in ("detect", "point") else render(image, {})
         raw_text = self.ask(shown, prompt_for(skill, prompt, pred))
         v = verdict_from(skill, parse_json(raw_text))
-        v["model"] = Path(self.model_dir).resolve().name
+        v["model"] = self.name
         v["raw"] = raw_text[:500]
         return v

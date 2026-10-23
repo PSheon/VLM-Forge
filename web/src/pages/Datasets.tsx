@@ -130,8 +130,9 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const doDelete = async () => { await api.deleteDataset(d.id); say(`刪了 ${d.name}`, "warn"); setAskDelete(false); onDeleted(); };
   const freeGb = status?.engine.gpu_free_gb ?? null;
   const judgeLoaded = status?.engine.judge_loaded ?? false;
-  const lowMem = freeGb !== null && !judgeLoaded && freeGb < 70;
-  const labelText = !judgeOk ? "出題模型缺，不能標" : gpuBusy ? "排隊中…（GPU 忙）" : lowMem ? `GPU 只剩 ${freeGb!.toFixed(0)} GB，等別的訓練結束` : unlabelled === 0 ? "沒有新圖" : `標註新加的 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張`;
+  const needGb = status?.engine.judge_need_gb ?? 70;
+  const lowMem = freeGb !== null && !judgeLoaded && freeGb < needGb;
+  const labelText = !judgeOk ? "出題模型缺，不能標" : gpuBusy ? "排隊中…（GPU 忙）" : lowMem ? `GPU 只剩 ${freeGb!.toFixed(0)} GB（出題要 ${needGb} GB），等別的訓練結束` : unlabelled === 0 ? "沒有新圖" : `標註新加的 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張`;
   const total = (full ?? d).images;
   const skippedNote = batch?.job?.student_error ? `模型沒作答（${batch.job.student_error}），這批全部交給你看` : null;
   const [pillText, pillKind] = statusPill(full ?? d);

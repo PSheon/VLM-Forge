@@ -25,7 +25,7 @@ Data Core 匯出包、GCS、CI、`stage` 分支與 gate 儀式、PRO 6000 kestre
 | 推論與訓練底層 | `src/vlmforge/model/`：純 PyTorch 移植（vision／text／region／LoRA），GB300 可跑；base 在三套 held-out 的分數與 SyncVision 記錄的 SyncVLM 一致（detect 0.368／0.370） |
 | 部署目標 | **Orin AGX，用 Moondream 官方 Photon 跑 base + adapter**（kestrel 有 Jetson aarch64 kernel） |
 | adapter 格式 | 官方 `lora_state_dict` 版面（`dense.{i}.up_a/up_b/down_a/down_b`、`moe.{j}.*`，alpha/r 已折進 B），**只掛文字 MLP**，rank 8–32；**region head 預設不訓**（訓了就只能在 Forge 跑，是進階選項） |
-| 出題／比對模型 | Qwen3-VL-32B-Instruct（`model-cache/judge`），8 張一批 |
+| 出題／比對模型 | Qwen3-VL-32B-Instruct（`model-cache/judge`，載入需 ~70 GB），8 張一批；GPU 被佔住放不下時退到 Qwen3-VL-8B-Instruct（`model-cache/judge-8b`，~22 GB），UI 標明「出題模型：8B（小）」，重啟後記憶體夠就回 32B |
 | GPU | 與 SyncVision 共用 GB300：SyncVision 優先；Forge 訓練 ≤ 60 GB；一律 `numactl --membind=0` |
 
 ## 4. 資料集

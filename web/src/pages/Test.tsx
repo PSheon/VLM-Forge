@@ -176,14 +176,15 @@ function Orin({ runs }: { runs: Run[] }) {
         <h3>匯出到 Orin AGX</h3>
         <label className="f">模型<select value={sel} onChange={(e) => setSel(e.target.value)}>{runs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}</select></label>
         {r && <div className="row hint"><Pill kind={r.region_head ? "warn" : "ok"}>{r.region_head ? "有 region head：Photon 載不了，只能在 Forge 跑" : "Photon 相容（只掛文字 MLP）"}</Pill><span className="muted">r{r.rank} · {r.rows} 筆 · {r.steps} 步</span></div>}
-        <a className="btn primary" href={r ? api.orinUrl(r.name) : "#"} aria-disabled={!r}>下載 adapter 包（adapter.pt、README、bench_orin.py、scores.json）</a>
-        <pre className="code">{`pip install moondream
-import moondream as md
+        <a className="btn primary" href={r ? api.orinUrl(r.name) : "#"} aria-disabled={!r}>下載 adapter 包（adapter.pt、local_adapter.py、README、bench_orin.py、scores.json）</a>
+        <pre className="code">{`pip install moondream          # 帶 kestrel（Photon）
 from PIL import Image
-m = md.vl(local=True, model="moondream3.1-9B-A2B", adapter="adapter.pt")
+from local_adapter import Tuned
+m = Tuned("adapter.pt")
 img = Image.open("frame.jpg")
-m.detect(img, "person"); m.query(img, "Is anyone without a helmet?")`}</pre>
-        <div className="muted hint">Orin 上跑 <code>python bench_orin.py --images ./frames --adapter adapter.pt</code> 量延遲（base vs adapter，每題毫秒，寫到 bench.json）；分數不在 Orin 上算。</div>
+m.detect(img, "person"); m.query(img, "Is anyone without a helmet?")
+m.base.detect(img, "person")   # 同一個 engine 跑 base 對照`}</pre>
+        <div className="muted hint">官方 client 的 adapter 只認雲端 id，所以包裡附 <code>local_adapter.py</code>（kestrel 的 AdapterProvider，從本機檔載）。Orin 上跑 <code>python bench_orin.py --images ./frames --adapter adapter.pt</code> 量延遲（base vs adapter，每題毫秒，寫到 bench.json）；分數不在 Orin 上算。</div>
       </div>
       <div className="panel col"><h3>分數（這個模型）</h3>{r && Object.entries(r.evals).map(([s, m]) => <div key={s} className="hint">{suiteLabel(s)}：{Object.entries(m).map(([k, v]) => `${k} ${fmt(v)}`).join(" · ")}</div>)}{r?.gate && <div className={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "比 base 好" : "沒有比 base 好"}</div>}</div>
     </div>

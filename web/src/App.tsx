@@ -80,8 +80,9 @@ function Shell() {
           {down ? <Pill kind="bad">連不到 server，重試中…</Pill> : e ? (
             <>
               {!e.weights_ok && <Pill kind="warn" title={`模型權重不在 ${e.weights}`} onClick={() => say(`模型權重不在 ${e.weights}。在 GB300 上：hf download moondream/moondream3.1-9B-A2B model.safetensors --local-dir model-cache/moondream31/weights`, "warn", { sticky: true })}>模型權重缺</Pill>}
-              {!e.judge_ok && <Pill kind="warn" title={`出題模型不在 ${e.judge}`} onClick={() => say(`出題模型不在 ${e.judge}（model-cache/judge 要指到 Qwen3-VL-32B-Instruct）`, "warn", { sticky: true })}>出題模型缺</Pill>}
-              {e.busy ? <Pill kind="ok">GPU {gpuText}</Pill> : e.gpu_free_gb !== undefined && e.gpu_free_gb !== null && e.gpu_free_gb < 70 && !e.judge_loaded ? <Pill kind="warn" title="出題模型要約 70 GB、Moondream 約 24 GB；別的訓練正在用 GPU，等它結束">GPU 被別的訓練佔用，剩 {e.gpu_free_gb.toFixed(0)} GB</Pill> : <Pill kind="grey">GPU 閒置{e.gpu_free_gb ? `，剩 ${e.gpu_free_gb.toFixed(0)} GB` : ""}</Pill>}
+              {!e.judge_ok && <Pill kind="warn" title={`出題模型不在 ${e.judge}`} onClick={() => say(`出題模型不在 ${e.judge}（model-cache/judge 要指到 Qwen3-VL-32B-Instruct；或下載 Qwen3-VL-8B-Instruct 到 model-cache/judge-8b）`, "warn", { sticky: true })}>出題模型缺</Pill>}
+              {e.judge_name === "Qwen3-VL-8B" && <Pill kind="warn" title="GPU 放不下 32B，這次用 8B 出題：題目與比對品質略低。等 GPU 空了重啟 server 會回到 32B">出題模型：8B（小）</Pill>}
+              {e.busy ? <Pill kind="ok">GPU {gpuText}</Pill> : e.gpu_free_gb !== undefined && e.gpu_free_gb !== null && e.gpu_free_gb < (e.judge_need_gb ?? 70) && !e.judge_loaded ? <Pill kind="warn" title={`出題模型至少要 ${e.judge_need_gb ?? 70} GB、Moondream 約 24 GB；別的訓練正在用 GPU，等它結束`}>GPU 被別的訓練佔用，剩 {e.gpu_free_gb.toFixed(0)} GB</Pill> : <Pill kind="grey">GPU 閒置{e.gpu_free_gb ? `，剩 ${e.gpu_free_gb.toFixed(0)} GB` : ""}</Pill>}
               {e.last_error && <Pill kind="bad" title={e.last_error} onClick={() => say(e.last_error!, "bad", { sticky: true, action: { label: "知道了", run: () => fetch("/api/status/clear-error", { method: "POST" }).then(refresh) } })}>上次錯誤</Pill>}
             </>
           ) : <span className="muted">連線中…</span>}

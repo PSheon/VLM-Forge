@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from vlmforge.autogen import items_from_fixed, parse_fixed
+from vlmforge.orin import BUNDLE_FILES
 from vlmforge.server import pipeline as pl
 from vlmforge.server.datasets import split_for
 from vlmforge.server.workspace import Workspace
@@ -205,6 +206,6 @@ def test_dataset_flow(client, monkeypatch):
     r = client.get("/api/train/ft-ds/orin.zip")
     assert r.status_code == 200
     names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
-    assert set(names) == {"adapter.pt", "README.md", "bench_orin.py", "scores.json"}
+    assert set(names) == set(BUNDLE_FILES)
     client.delete(f"/api/datasets/{ds['id']}")
     assert client.get("/api/datasets").json() == []

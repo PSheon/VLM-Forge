@@ -34,7 +34,8 @@ GB300 上一律 `numactl --membind=0 uv run forge …`。
 | `src/vlmforge/server/` | UI 後端：workspace（SQLite）、GPU worker、API、匯出 |
 | `web/` | UI 前端（Vite + React） |
 | `configs/` | 訓練設定 |
-| `model-cache/`、`runs/`、`adapters/`、`workspace/`、`data/` | 不進 git |
+| `model-cache/` | 不進 git：`moondream31/`（權重＋tokenizer）、`judge` → Qwen3-VL-32B-Instruct、`judge-8b/` → Qwen3-VL-8B-Instruct（GPU 放不下 32B 時的備案） |
+| `runs/`、`adapters/`、`workspace/`、`data/` | 不進 git |
 
 ## 分支
 
