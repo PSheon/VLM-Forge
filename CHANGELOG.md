@@ -11,6 +11,10 @@ All notable changes to VLM-Forge. Versions follow [SemVer](https://semver.org/);
 - **Training always validates when it can.** A run whose datasets had no confirmed question in their val split trained with no val curve at all (ft-1023-1911). It now holds out ~10 % of the train images (≥ 5 images) instead, and the train page's summary says where validation comes from (datasets return `val_rows`), with a warning when there is none.
 
 ### Added
+- **Ctrl+Z reopens the last saved question** (any image, a whole 「剩下全存」 counts as one step); reopening an agreed question restores its auto label instead of leaving it empty.
+- **Pace** in the review title row: seconds per question over the recent saves (pauses over 2 min ignored) and the time left for what is still pending.
+- **Point snapping.** A click inside a pre-label box that has no point yet places the point at the box centre; `Alt` places it exactly where you clicked.
+- **Long jobs in the tab title** — 「(標註 72/120) VLM-Forge」, 「(訓練 120/226)」 — and a toast plus a desktop notification (when the tab is in the background and you allowed it on 標註 / 開始訓練) when one finishes or fails.
 - `web/e2e/smoke.mjs` (`npm run e2e`): the UI contract of docs/ui-spec §1 as a read-only Playwright check.
 - **AI 導師可信度.** The dataset page shows how far the spot check got and the share of re-checked agreed questions you left as they were (≥ 90 % with ≥ 30 seen = auto-passed questions are trustworthy). 「只看抽查」 (dataset card or the review tool row) serves only images with spot-check questions and steps only through those; `GET /api/review/next-image?spot=true`, datasets return `spot`.
 

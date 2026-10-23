@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, fmt, fmtDelta, phaseLabel, suiteLabel, type Dataset, type Run, type Status } from "../api";
-import { ActionsHead, Bar, ConfirmDialog, PageHead, Pill, Skeleton, useToast } from "../components/ui";
+import { ActionsHead, Bar, ConfirmDialog, PageHead, Pill, Skeleton, askNotify, useToast } from "../components/ui";
 import { Fade, Item, Pop, Stagger } from "../components/motion";
 import type { Step } from "../App";
 
@@ -56,6 +56,7 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   const shown = running ?? runs.find((r) => r.name === openRun) ?? runs.find((r) => r.state !== "cancelled");
 
   const start = async () => {
+    askNotify();
     try { await api.train({ name: nameFinal, steps: nSteps, lr: parseFloat(lr), rank, dataset_ids: picked, region_head: regionHead }); say(`開始訓練 ${nameFinal}`); setName(""); setOpenRun(nameFinal); load(); } catch (err) { say(String(err), "bad", { sticky: true }); }
   };
   return (

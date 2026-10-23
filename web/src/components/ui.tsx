@@ -92,6 +92,15 @@ export function useEscBack(active: boolean, back: () => void) {
   }, [active, back]);
 }
 
+/** Ask once, from a click (browsers require a gesture), whether long jobs may notify. */
+export function askNotify() {
+  try { if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission(); } catch { /* unsupported */ }
+}
+/** A desktop notification when the tab is in the background and permission was given. */
+export function notify(title: string, body: string) {
+  try { if ("Notification" in window && Notification.permission === "granted" && document.hidden) new Notification(title, { body }); } catch { /* unsupported */ }
+}
+
 /** Grey placeholder blocks shown until the first response arrives (no layout jump). */
 export function Skeleton({ h = 16, w = "100%", r = 6, n = 1, gap = 8 }: { h?: number; w?: number | string; r?: number; n?: number; gap?: number }) {
   return <div className="col" style={{ gap }} aria-busy="true" aria-label="載入中">{Array.from({ length: n }, (_, i) => <div key={i} className="skel" style={{ height: h, width: w, borderRadius: r }} />)}</div>;

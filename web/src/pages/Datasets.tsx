@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, parseFixed, phaseLabel, type Batch, type Dataset, type GridCell, type Skill, type Status } from "../api";
-import { ActionsHead, Bar, ConfirmDialog, Dialog, PageHead, Pill, Section, Skeleton, eta, useToast } from "../components/ui";
+import { ActionsHead, Bar, ConfirmDialog, Dialog, PageHead, Pill, Section, Skeleton, askNotify, eta, useToast } from "../components/ui";
 import { Fade, Item, Pop, Stagger } from "../components/motion";
 import Review from "./Review";
 import type { Step } from "../App";
@@ -145,6 +145,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
     try { const r = await api.addFolder(d.id, dir.trim()); say(`加入 ${r.added} 張`); setDir(""); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
   };
   const label = async () => {
+    askNotify();
     setBusy(true);
     try { if (cfgDirty) await saveConfig(); await api.label(d.id, n === "" ? undefined : Number(n)); say(`開始標註 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張，先載入出題模型…`, "ok", { ms: 2500 }); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
   };
