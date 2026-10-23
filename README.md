@@ -2,7 +2,7 @@
 
 **Fine-tune [Moondream 3.1](https://huggingface.co/moondream/moondream3.1-9B-A2B) locally for your own scene — detect, point, query and caption — without writing labels by hand.**
 
-[![version](https://img.shields.io/badge/version-0.2.0-e2600f)](CHANGELOG.md) [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE) ![python](https://img.shields.io/badge/python-3.12-3776ab) ![Moondream 3.1](https://img.shields.io/badge/Moondream-3.1%209B--A2B-1b1f26)
+[![version](https://img.shields.io/badge/version-0.3.0-e2600f)](CHANGELOG.md) [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE) ![python](https://img.shields.io/badge/python-3.12-3776ab) ![Moondream 3.1](https://img.shields.io/badge/Moondream-3.1%209B--A2B-1b1f26)
 
 An AI teacher (Qwen3-VL) looks at your photos and writes the questions and the answers, Moondream answers the same questions, the two are compared, and you only check what they disagree on — one question at a time, keyboard first. Confirmed answers become a dataset; one button trains a LoRA adapter; the adapter is scored against the untouched base on held-out images and exported in the exact layout Moondream's **Photon** runtime (kestrel) loads on a **Jetson Orin**.
 
@@ -20,11 +20,13 @@ Built for factory / warehouse CCTV (是否有值班人員、有沒有戴安全�
 
 ## The three steps
 
-Every page has the same shape: content on the left, an action column on the right whose first element is the page's one orange button. Sub-views open from the content and go back with `←` or `Esc`.
+Every page has the same shape: content on the left, an action column on the right with a tool row (「? 快捷鍵」) and then the page's one orange button. Orange always means "do this next" (or your answer on the canvas); everything else is neutral. Sub-views open from the content and go back with `←` or `Esc`. Light and dark themes; on narrow windows the primary action pins to the bottom.
+
+![Datasets: one row per dataset with thumbnails and review progress](docs/screenshots/datasets.jpg)
 
 ### ① 資料集 — photos in, confirmed answers out
 
-Drop photos, a zip or a folder path. The grid shows how many questions on each image still disagree; the orange button is always the next thing to do. The teacher's settings live in the action column: automatic questions (objects, counts, yes/no, attributes, inspection checks, a caption), fixed prompts you write once (`detect: person, helmet` / `query: Is anyone without a helmet?`), or both. 10 % of the images become the dataset's validation split.
+Drop photos, a zip or a folder path. The grid shows how many questions on each image still disagree; the orange button is always the next thing to do; settings, export and delete live in the action column, the last pinned to its bottom. The teacher's settings live in the action column: automatic questions (objects, counts, yes/no, attributes, inspection checks, a caption), fixed prompts you write once (`detect: person, helmet` / `query: Is anyone without a helmet?`), or both. 10 % of the images become the dataset's validation split.
 
 ![Dataset page: thumbnails with disagreement counts, the next step, the last batch](docs/screenshots/dataset.jpg)
 
@@ -40,9 +42,11 @@ Drop photos, a zip or a folder path. The grid shows how many questions on each i
 | point | click to add, drag to move; `3` puts a point in every pre-label box that has none; `Backspace` removes the last |
 | caption | edit the text; phrases the judge could not find in the image are chips you can delete |
 
-`Enter` saves, `1` / `2` take the teacher's or the model's answer, `Shift+Enter` saves the rest of the image, `D` discards, `S` skips. The canvas zooms to the boxes in question (`F` for the whole image), pre-label boxes turn green once your answer covers them, and a key bar at the bottom shows what works right now.
+`Enter` saves, `1` / `2` take the teacher's or the model's answer, `Shift+Enter` saves the rest of the image, `D` discards, `S` skips. The canvas zooms to the boxes in question (`F` for the whole image) with its controls floating over the image, pre-label boxes turn green once your answer covers them, and a key bar at the bottom shows what works right now — so buttons stay few and unlabelled.
 
 ![Review, yes/no: two keys, saves on press](docs/screenshots/review-yesno.jpg)
+
+![Review, count: digits or ↑↓, the question list beside it](docs/screenshots/review-count.jpg)
 
 ![Review, detect: pre-label coverage in green, and the option to save the matching point question](docs/screenshots/review-detect.jpg)
 
@@ -56,7 +60,7 @@ Pick datasets as cards (confirmed questions, images, a bar per skill), keep the 
 
 ### ③ 測試 — base vs your model
 
-One card per exam (the target suite is marked, references are dimmed), every cell with its delta. 看差異 walks through the items that changed, both canvases zooming together. 試一張 runs base and the adapter on any image with factory quick prompts. The Orin bundle is a section in the action column: `adapter.pt`, a loader, a latency script.
+The target exam (factory CCTV) leads as a full-width card with the gate verdict; validation splits and reference suites sit below; every cell shows its delta, every model column has one 「看差異」. 看差異 walks through the items that changed, both canvases zooming together. 試一張 runs base and the adapter on any image with factory quick prompts. The Orin bundle is a section in the action column: `adapter.pt`, a loader, a latency script.
 
 ![Scores: one card per held-out suite, deltas against base, Orin export section](docs/screenshots/test-scores.jpg)
 
@@ -116,7 +120,7 @@ Branches: `feat/* → dev → main`. `ruff` for lint and format, `uv` for the en
 
 ## Status
 
-v0.2.0 (2026-10-23), working end to end on one GB300: a 120-image warehouse set → 2 845 questions → per-question review → train → score → diff → Orin bundle. The port's base scores match the official runtime on three held-out suites; the same trainer, on a larger in-domain set, raised CCTV detect from 0.37 to 0.46 (text-MLP LoRA only). Not yet verified on real Orin hardware.
+v0.3.0 (2026-10-23), working end to end on one GB300: a 120-image warehouse set → 2 845 questions → per-question review → train → score → diff → Orin bundle. The port's base scores match the official runtime on three held-out suites; the same trainer, on a larger in-domain set, raised CCTV detect from 0.37 to 0.46 (text-MLP LoRA only). Not yet verified on real Orin hardware.
 
 ## License
 
