@@ -438,6 +438,13 @@ class Workspace:
         ).fetchone()
         out = dict(r)
         out["trainable"] = (out["auto"] or 0) + (out["reviewed"] or 0)
+        try:  # images that belong to a dataset count even before they have items
+            out["images"] = self.db.execute(
+                "select count(*) from (select image_id from dataset_images"
+                " union select image_id from items)"
+            ).fetchone()[0]
+        except sqlite3.OperationalError:  # table not created yet (no DatasetStore)
+            pass
         return out
 
     def claim_next(self, queue_id: int, reviewer: str, after: int | None = None) -> dict | None:

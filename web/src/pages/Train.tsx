@@ -29,7 +29,7 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   const e = status?.engine;
   const nameFinal = name.trim() || autoName();
   const blockers: string[] = [];
-  if (rows === 0) blockers.push("沒有可訓練的題：先到 ② 確認一些");
+  if (rows === 0) blockers.push("沒有可訓練的題：先到 ① 資料集 標註並檢查");
   if (runs.some((r) => r.name === nameFinal)) blockers.push(`名稱「${nameFinal}」已經有了`);
   if (e && !e.weights_ok) blockers.push("模型權重缺");
   if (running) blockers.push(`正在訓練 ${running.name}，等它完成或取消`);

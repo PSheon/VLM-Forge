@@ -264,6 +264,11 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             "models": list_models(),
         }
 
+    @app.post("/api/status/clear-error")
+    def clear_error():
+        engine.clear_error()
+        return {"ok": True}
+
     @app.get("/api/models")
     def models():
         return list_models()

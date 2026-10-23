@@ -152,6 +152,9 @@ class Engine:
         self.q.put((fn, model, fut))
         return fut
 
+    def clear_error(self) -> None:
+        self.error = None
+
     def pending(self) -> int:
         return self.q.qsize()
 
