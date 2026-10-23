@@ -1,0 +1,16 @@
+# Lint + CPU-only unit tests (GOALS §9). Nothing here touches a GPU or the data host.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [dev, stage, main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --group dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q
