@@ -2,6 +2,26 @@
 
 All notable changes to VLM-Forge. Versions follow [SemVer](https://semver.org/); dates are when the version reached `main`.
 
+## [0.3.0] — 2026-10-23
+
+A layout pass: one visual language, more room for the image, fewer buttons.
+
+### Changed
+- **Colour roles.** Orange means only the action to take and your answer on the canvas. Current / selected states are neutral, warnings amber, the focus ring blue.
+- **Type and spacing scales** as tokens (20 / 16 / 14 / 13 / 12 px; 4 / 8 / 12 / 16 / 24 px), used everywhere.
+- **Top bar.** One short state per step (「119 張待看」「1381 筆可訓」「1 個模型可比」) and a single system chip — GPU, weights, teacher model, last error — whose popover closes on an outside click or `Esc`.
+- **Review gets a taller image** (≈ 470 → 560 px at 1440 × 900): the file name and 「這張還有 N 題」 moved into the title row, the canvas controls float over the image, the per-question instructions moved into 「? 快捷鍵」.
+- **Every action column** starts with a tool row level with the title row (「? 快捷鍵」 on the right, page tools such as 「所有圖」 on the left), fills the window, and pins its footer (建立 / 刪除) to the bottom.
+- **Dataset list** as rows with a thumbnail strip, review progress and the numbers (the API returns `thumbs`).
+- **Scores.** The target suite (factory CCTV) is a full-width card; validation splits and reference suites sit below; one 「看差異」 per model column.
+- **Widths.** A 340 px action column at 1101–1366 px; one column with the primary action pinned to the bottom of the window at ≤ 1100 px.
+
+### Added
+- Loading skeletons for the dataset list, the image grid, the train cards and the scores.
+
+### Removed
+- Redundant buttons: the canvas 「移動」 and 「刪除選取」 (Space / middle / right drag pans, `Delete` deletes), the 「去訓練」 link on the dataset page (the step bar has it), duplicate 「看差異」 links, and the train page's second orange button. Key labels appear only on the primary button; the key bar lists the rest.
+
 ## [0.2.0] — 2026-10-23
 
 Review is the bottleneck, so this release is about looking at fewer questions, faster.
@@ -30,5 +50,6 @@ Review is the bottleneck, so this release is about looking at fewer questions, f
 
 First version that runs data → review → train → test entirely in the UI: datasets with an AI-teacher labelling flywheel (Qwen3-VL-32B, 8B fallback), one-question-at-a-time review, LoRA training on Moondream 3.1's text MLPs (Photon-compatible), held-out scoring and gate, item-by-item diff, playground, Orin bundle with a local adapter loader, resumable labelling batches, motion and robust image loading.
 
+[0.3.0]: https://github.com/PSheon/VLM-Forge/releases/tag/v0.3.0
 [0.2.0]: https://github.com/PSheon/VLM-Forge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/PSheon/VLM-Forge/releases/tag/v0.1.0

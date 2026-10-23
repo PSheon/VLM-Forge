@@ -60,6 +60,18 @@ export function PageHead({ back, title, children }: { back?: { label: string; on
   return <div className="row page-head">{back && <button className="ghost back" onClick={back.onClick} title="Esc">{back.label}</button>}<h2>{title}</h2>{children}</div>;
 }
 
+/** The first row of every action column, level with the page's title row: page tools on the
+ *  left (e.g. 所有圖), the shortcut help on the right. Keeps the primary button aligned with the
+ *  first line of content under the title. */
+export function ActionsHead({ children }: { children?: ReactNode }) {
+  return (
+    <div className="actions-head">
+      <span className="row">{children}</span>
+      <button className="ghost help" onClick={() => window.dispatchEvent(new Event("forge:help"))} title="快捷鍵（?）" aria-label="快捷鍵"><kbd>?</kbd> 快捷鍵</button>
+    </div>
+  );
+}
+
 /** A collapsible block in the action column (settings, export): one line with a summary. */
 export function Section({ title, summary, open, onToggle, dirty, children }: { title: string; summary: string; open: boolean; onToggle: () => void; dirty?: boolean; children: ReactNode }) {
   return (
@@ -78,6 +90,11 @@ export function useEscBack(active: boolean, back: () => void) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [active, back]);
+}
+
+/** Grey placeholder blocks shown until the first response arrives (no layout jump). */
+export function Skeleton({ h = 16, w = "100%", r = 6, n = 1, gap = 8 }: { h?: number; w?: number | string; r?: number; n?: number; gap?: number }) {
+  return <div className="col" style={{ gap }} aria-busy="true" aria-label="載入中">{Array.from({ length: n }, (_, i) => <div key={i} className="skel" style={{ height: h, width: w, borderRadius: r }} />)}</div>;
 }
 
 export function Pill({ kind, children, title, onClick }: { kind?: "ok" | "bad" | "warn" | "grey"; children: ReactNode; title?: string; onClick?: () => void }) {

@@ -63,7 +63,6 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
   const [t, setT] = useState({ x: 0, y: 0 });
   const [sel, setSel] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag>(null);
-  const [pan, setPan] = useState(false);
   const [space, setSpace] = useState(false);
   const [hide, setHide] = useState(false);
   const [showAlt, setShowAlt] = useState(true);
@@ -71,7 +70,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
   const boxes = value?.boxes ?? [];
   const points = value?.points ?? [];
   const editable = !!onChange && !readOnly && spatial;
-  const panning = pan || space;
+  const panning = space; // Space held; middle / right drag pans too
   const n = skill === "detect" ? boxes.length : points.length;
 
   const layout = useCallback(() => {
@@ -219,9 +218,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
         <button onClick={() => zoomTo(clamp(z / 1.5, MIN_Z, MAX_Z))} title="縮小">−</button>
         <span className="muted num" style={{ minWidth: 44, textAlign: "center" }}>{Math.round(z * 100)}%</span>
         <button onClick={() => zoomTo(clamp(z * 1.5, MIN_Z, MAX_Z))} title="放大">＋</button>
-        <button onClick={reset} title="F">適應 <kbd>F</kbd></button>
-        {editable && <button className={panning ? "cur" : ""} onClick={() => setPan(!pan)} title="按住 Space 也可以拖動">移動</button>}
-        {editable && sel !== null && <button onClick={removeSel}>刪除選取 <kbd>Del</kbd></button>}
+        <button onClick={reset} title="F">適應</button>
         {!compact && <span className="muted">滾輪縮放 · {editable ? (skill === "detect" ? "拖曳畫框 · 拖角縮放 · 點框選取" : "點一下加點 · 拖動移動") : "拖曳移動"}</span>}
         {labels && (
           <span className="legend" style={{ marginLeft: "auto" }}>

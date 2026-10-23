@@ -109,6 +109,14 @@ class DatasetStore:
         d = dict(row)
         d["config"] = json.loads(d["config"] or "{}")
         d.update(self.counts(d["id"]))
+        d["thumbs"] = [  # the list's thumbnail strip: the first few images added
+            r[0]
+            for r in self.db.execute(
+                "select image_id from dataset_images where dataset_id = ?"
+                " order by added_at, image_id limit 6",
+                (d["id"],),
+            )
+        ]
         return d
 
     def get(self, ds_id: int) -> dict:
