@@ -222,6 +222,9 @@ def test_dataset_flow(client, monkeypatch):
         time.sleep(0.02)
     cfg = __import__("yaml").safe_load(open(client.tmp / "runs" / "ft-ds" / "config.yaml"))
     assert cfg["region_head"] is False
+    assert cfg["data"]["val_images"] == 0  # 4 images: nothing more may be held out
+    d2 = client.get(f"/api/datasets/{ds['id']}").json()
+    assert d2["trainable_images"] == 4 - d2["val_images"]  # val images never count
     # the Orin bundle needs an adapter file
     assert client.get("/api/train/ft-ds/orin.zip").status_code == 404
     (client.tmp / "runs" / "ft-ds" / "ft-ds.pt").write_bytes(b"x")

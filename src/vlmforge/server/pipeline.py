@@ -42,7 +42,11 @@ def write_config(
     lr: float,
     rank: int,
     region_head: bool = False,
+    val_jsonl: list[Path] | None = None,
 ):
+    """The YAML ``forge train`` reads. ``val_jsonl``: the datasets' own validation rows; with
+    them the trainer holds nothing else out (a 2-image run once lost both images to the
+    inner split and crashed), without them it holds out n_images // 20 (0 for tiny sets)."""
     cfg = {
         "name": name,
         "out": str(paths.RUNS / name),
@@ -58,7 +62,8 @@ def write_config(
                 for s in paths.HELDOUT_SUITES
                 if (paths.MANIFESTS / f"{s}.jsonl").exists()
             ],
-            "val_images": max(4, min(50, n_images // 20)),
+            "val_images": 0 if val_jsonl else min(50, n_images // 20),
+            **({"val": [str(p) for p in val_jsonl]} if val_jsonl else {}),
             "max_objects": 50,
             "max_text": 384,
             "workers": 16,
@@ -197,7 +202,16 @@ class Pipeline:
         for line in open(train_path):
             k = json.loads(line)["skill"]
             skills[k] = skills.get(k, 0) + 1
-        cfg = write_config(name, train_path, n_images, steps, lr, rank, region_head)
+        cfg = write_config(
+            name,
+            train_path,
+            n_images,
+            steps,
+            lr,
+            rank,
+            region_head,
+            list((val_manifests or {}).values()),
+        )
         st = {
             "name": name,
             "state": "running",

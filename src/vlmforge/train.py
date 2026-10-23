@@ -312,8 +312,17 @@ def train(cfg_path: str) -> None:
 
     d, o, rcfg = cfg["data"], cfg["optim"], cfg.get("replay", {})
     rows, stats = load_rows(cfg)
-    train_rows, val_rows = split_rows(rows, d.get("val_images", 200), seed)
+    if d.get("val"):  # the datasets' own validation split (server runs): no inner split
+        train_rows, val_rows = rows, mixture(d["val"], seed)
+    else:
+        train_rows, val_rows = split_rows(rows, d.get("val_images", 200), seed)
     print(f"rows train {len(train_rows)} val {len(val_rows)} {stats}", flush=True)
+    if not train_rows:
+        n_img = len({r["image"] for r in rows})
+        raise SystemExit(
+            f"no training rows: {len(rows)} rows on {n_img} images, data.val_images="
+            f"{d.get('val_images', 200)} held them all out — lower it or add images"
+        )
     max_obj, max_text = d.get("max_objects", 50), d.get("max_text", 384)
 
     m = Moondream(paths.WEIGHTS, paths.TOKENIZER, batch_size=rcfg.get("batch", 64))
@@ -335,6 +344,9 @@ def train(cfg_path: str) -> None:
             pool_path.write_text(json.dumps({"key": key, "entries": replay}))
         names = [f"{sk}:{next(iter(it.values()))}" for g in prompts.values() for sk, it in g]
         print(f"replay prompts {names}", flush=True)
+        if not replay:
+            ratio = 0.0
+            print("replay pool empty: training without replay", flush=True)
 
     rank = cfg.get("rank", 16)
     lora = TextLoRA(rank, dev, dtype=torch.float32, alpha=cfg.get("alpha", 2 * rank))

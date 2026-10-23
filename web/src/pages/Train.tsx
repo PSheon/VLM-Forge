@@ -23,7 +23,7 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
   const chosen = datasets.filter((d) => picked.includes(d.id));
   const rows = chosen.reduce((a, d) => a + d.trainable, 0);
-  const images = chosen.reduce((a, d) => a + d.images - d.val_images, 0);
+  const images = chosen.reduce((a, d) => a + (d.trainable_images ?? 0), 0);
   const bySkill = { detect: chosen.reduce((a, d) => a + d.detect, 0), point: chosen.reduce((a, d) => a + d.point, 0), query: chosen.reduce((a, d) => a + d.query, 0), caption: chosen.reduce((a, d) => a + d.caption, 0) };
   const autoSteps = Math.max(100, Math.min(1000, images * 2));
   const running = runs.find((r) => r.state === "running");
@@ -36,6 +36,7 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   if (running) blockers.push(`正在訓練 ${running.name}，等它完成或取消`);
   const warns: string[] = [];
   for (const d of chosen) if (d.images_pending > 0) warns.push(`${d.name} 還有 ${d.images_pending} 張沒看：沒看的不算進去`);
+  if (rows > 0 && images < 10) warns.push(`只有 ${images} 張圖有確認的題：模型會把這幾張背起來，多看幾張再訓比較值`);
   for (const [k, v] of Object.entries(bySkill)) if (v > 0 && v < 20) warns.push(`${k} 只有 ${v} 筆，效果有限`);
   if (regionHead) warns.push("開了 region head，這個 adapter Orin 的 Photon 載不了");
 

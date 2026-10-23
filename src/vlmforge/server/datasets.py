@@ -216,9 +216,19 @@ class DatasetStore:
             " from items join queues on queues.id = items.queue_id where queues.dataset_id = ?",
             (ds_id,),
         ).fetchone()
+        ti = self.db.execute(
+            "select count(distinct items.image_id) from items"
+            " join queues on queues.id = items.queue_id"
+            " join dataset_images di on di.image_id = items.image_id"
+            " and di.dataset_id = queues.dataset_id"
+            " where queues.dataset_id = ? and di.split = 'train'"
+            " and items.status in ('auto', 'approved', 'corrected')",
+            (ds_id,),
+        ).fetchone()[0]
         out = {"images": r["images"] or 0, "val_images": r["val"] or 0}
         out.update({k: (c[k] or 0) for k in c.keys()})
         out["trainable"] = out["auto"] + out["reviewed"]
+        out["trainable_images"] = ti or 0  # train-split images with ≥1 confirmed item
         return out
 
     def rows(self, ds_id: int, split: str) -> list[dict]:

@@ -89,6 +89,7 @@ export interface Dataset {
   query: number;
   caption: number;
   trainable: number;
+  trainable_images: number; // train-split images with at least one confirmed question
   batches?: Batch[];
   unlabelled?: number;
 }
