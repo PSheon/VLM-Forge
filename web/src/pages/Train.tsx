@@ -1,11 +1,14 @@
-// ③ 訓練 (docs/ui-spec §5): pick datasets, three knobs, one button; the run trains,
-// evaluates on the held-out suites and each dataset's val split, and gates itself.
+// ② 訓練 (docs/ui-spec §5): ① pick datasets → ② settings → run; history underneath. The action
+// column holds the button and a summary of exactly what this run will train on.
 
 import { useCallback, useEffect, useState } from "react";
 import { api, fmt, fmtDelta, phaseLabel, suiteLabel, type Dataset, type Run, type Status } from "../api";
-import { Bar, ConfirmDialog, Pill, useToast } from "../components/ui";
-import { Item, Pop, Stagger } from "../components/motion";
+import { Bar, ConfirmDialog, PageHead, Pill, useToast } from "../components/ui";
+import { Fade, Item, Pop, Stagger } from "../components/motion";
 import type { Step } from "../App";
+
+const SKILL_KEYS = ["detect", "point", "query", "caption"] as const;
+type SkillKey = (typeof SKILL_KEYS)[number];
 
 export default function Train({ status, go, reviewer }: { status: Status | null; go: (s: Step) => void; reviewer: string }) {
   const { say } = useToast();
@@ -19,73 +22,119 @@ export default function Train({ status, go, reviewer }: { status: Status | null;
   const [rank, setRank] = useState(16);
   const [regionHead, setRegionHead] = useState(false);
   const [askDel, setAskDel] = useState<string | null>(null);
-  const load = useCallback(() => { api.datasets().then((d) => { setDatasets(d.filter((x) => x.trainable > 0)); setPicked((p) => (p.length ? p : d.filter((x) => x.trainable > 0).map((x) => x.id))); }).catch(() => undefined); api.runs().then((r) => setRuns(r.runs)).catch(() => undefined); }, []);
+  const [openRun, setOpenRun] = useState<string | null>(null);
+  // every dataset is listed; only those with confirmed questions can be picked (all of them
+  // are, by default), so a new or still-labelling dataset is visible with the reason it is out
+  const load = useCallback(() => { api.datasets().then((d) => { setDatasets(d); setPicked((p) => (p.length ? p.filter((id) => d.some((x) => x.id === id && x.trainable > 0)) : d.filter((x) => x.trainable > 0).map((x) => x.id))); }).catch(() => undefined); api.runs().then((r) => setRuns(r.runs)).catch(() => undefined); }, []);
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
   const chosen = datasets.filter((d) => picked.includes(d.id));
   const rows = chosen.reduce((a, d) => a + d.trainable, 0);
   const images = chosen.reduce((a, d) => a + (d.trainable_images ?? 0), 0);
-  const n = (k: "detect" | "point" | "query" | "caption") => chosen.reduce((a, d) => a + (d.trainable_by_skill?.[k] ?? 0), 0);
-  const bySkill = { detect: n("detect"), point: n("point"), query: n("query"), caption: n("caption") }; // confirmed, train split only
+  const val = chosen.reduce((a, d) => a + d.val_images, 0);
+  const sk = (d: Dataset | Dataset[], k: SkillKey) => ([] as Dataset[]).concat(d).reduce((a, x) => a + (x.trainable_by_skill?.[k] ?? 0), 0);
+  const bySkill = Object.fromEntries(SKILL_KEYS.map((k) => [k, sk(chosen, k)])) as Record<SkillKey, number>; // confirmed, train split only
   const autoSteps = Math.max(100, Math.min(1000, images * 2));
+  const nSteps = steps === "" ? autoSteps : Number(steps);
   const running = runs.find((r) => r.state === "running");
   const e = status?.engine;
   const nameFinal = name.trim() || autoName();
   const blockers: string[] = [];
-  if (rows === 0) blockers.push("沒有可訓練的題：先到 ① 資料集 標註並檢查");
+  if (rows === 0) blockers.push("還沒選資料集，或選的資料集沒有確認過的題");
   if (runs.some((r) => r.name === nameFinal)) blockers.push(`名稱「${nameFinal}」已經有了`);
   if (e && !e.weights_ok) blockers.push("模型權重缺");
   if (running) blockers.push(`正在訓練 ${running.name}，等它完成或取消`);
   const warns: string[] = [];
   for (const d of chosen) if (d.images_pending > 0) warns.push(`${d.name} 還有 ${d.images_pending} 張沒看：沒看的不算進去`);
   if (rows > 0 && images < 10) warns.push(`只有 ${images} 張圖有確認的題：模型會把這幾張背起來，多看幾張再訓比較值`);
-  for (const [k, v] of Object.entries(bySkill)) if (v > 0 && v < 20) warns.push(`${k} 只有 ${v} 筆，效果有限`);
+  for (const k of SKILL_KEYS) if (bySkill[k] > 0 && bySkill[k] < 20) warns.push(`${k} 只有 ${bySkill[k]} 筆，效果有限`);
   if (regionHead) warns.push("開了 region head，這個 adapter Orin 的 Photon 載不了");
+  const toggle = (d: Dataset) => { if (d.trainable === 0) return; setPicked((p) => (p.includes(d.id) ? p.filter((x) => x !== d.id) : [...p, d.id])); };
+  const shown = running ?? runs.find((r) => r.name === openRun) ?? runs.find((r) => r.state !== "cancelled");
 
   const start = async () => {
-    try { await api.train({ name: nameFinal, steps: steps === "" ? autoSteps : Number(steps), lr: parseFloat(lr), rank, dataset_ids: picked, region_head: regionHead }); say(`開始訓練 ${nameFinal}`); setName(""); load(); } catch (err) { say(String(err), "bad", { sticky: true }); }
+    try { await api.train({ name: nameFinal, steps: nSteps, lr: parseFloat(lr), rank, dataset_ids: picked, region_head: regionHead }); say(`開始訓練 ${nameFinal}`); setName(""); setOpenRun(nameFinal); load(); } catch (err) { say(String(err), "bad", { sticky: true }); }
   };
   return (
-    <div className="col" style={{ maxWidth: 1100 }}>
-      <div className="grid-2">
+    <div className="page">
+      <div className="col">
+        <PageHead title="訓練">{running ? <Pill kind="warn">{running.name} {running.phase === "training" ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : phaseLabel(running.phase)}</Pill> : <span className="muted hint">選資料集 → 確認設定 → 開始；訓完自動評分</span>}</PageHead>
+
         <div className="panel col">
-          <h3>訓練集</h3>
-          {datasets.length === 0 && <div className="muted hint">還沒有確認過的題。</div>}
-          {datasets.map((d) => (
-            <label key={d.id} className="row"><input type="checkbox" checked={picked.includes(d.id)} onChange={(ev) => setPicked(ev.target.checked ? [...picked, d.id] : picked.filter((x) => x !== d.id))} /> <b>{d.name}</b><span className="muted small">{d.trainable} 筆 · 驗證集 {d.val_images} 張{d.images_pending ? ` · 還有 ${d.images_pending} 張沒看` : ""}</span></label>
-          ))}
-          <div className="small muted">合計 {rows} 筆 · {images} 張圖 · detect {bySkill.detect} · point {bySkill.point} · query {bySkill.query} · caption {bySkill.caption}</div>
+          <div className="step-h"><span className="n">1</span><h3>選資料集</h3><span className="muted hint">點卡片勾選；只有確認過的題會進訓練，每個資料集留 10% 驗證集評分</span></div>
+          {datasets.length === 0 && <div className="empty">還沒有資料集。<button className="ghost" onClick={() => go("datasets")}>去建立 →</button></div>}
+          <Stagger className="ds-pick">
+            {datasets.map((d) => {
+              const on = picked.includes(d.id), off = d.trainable === 0;
+              const why = d.batches?.[0]?.job?.state === "running" ? "標註中，還沒有確認的題" : d.items ? `還沒有確認的題（${d.images_pending} 張要看）` : "還沒標註";
+              return (
+                <Item key={d.id} className={`card${on ? " on" : ""}${off ? " off" : ""}`} onClick={() => toggle(d)} title={off ? why : on ? "點一下取消" : "點一下加入"}>
+                  <div className="row" style={{ justifyContent: "space-between" }}><span className="row"><input type="checkbox" checked={on} disabled={off} readOnly /><span className="name">{d.name}</span></span>{d.images_pending > 0 && !off && <Pill kind="warn">{d.images_pending} 張沒看</Pill>}</div>
+                  {off ? <div className="small muted">{why}</div> : (
+                    <>
+                      <div className="stat"><span>筆 <b>{d.trainable}</b></span><span>圖 <b>{d.trainable_images ?? 0}</b></span><span>驗證 <b>{d.val_images}</b></span></div>
+                      <SkillMix counts={Object.fromEntries(SKILL_KEYS.map((k) => [k, sk(d, k)])) as Record<SkillKey, number>} />
+                    </>
+                  )}
+                </Item>
+              );
+            })}
+          </Stagger>
+        </div>
+
+        <div className="panel col">
+          <div className="step-h"><span className="n">2</span><h3>設定</h3><span className="muted hint">預設值通常就好</span></div>
           <div className="row">
             <label className="f">名稱<input value={name} placeholder={autoName()} onChange={(ev) => setName(ev.target.value)} onKeyDown={(ev) => ev.key === "Enter" && !blockers.length && start()} /></label>
             <label className="f">步數<input type="number" min={20} value={steps} placeholder={String(autoSteps)} onChange={(ev) => setSteps(ev.target.value === "" ? "" : +ev.target.value)} style={{ width: 110 }} /></label>
             <label className="f">學習率<input value={lr} onChange={(ev) => setLr(ev.target.value)} style={{ width: 100 }} /></label>
+            <button className="ghost" onClick={() => setAdv(!adv)} style={{ alignSelf: "flex-end" }}>{adv ? "收起進階" : "進階 ▾"}</button>
           </div>
-          <button className="ghost" onClick={() => setAdv(!adv)} style={{ alignSelf: "flex-start" }}>{adv ? "收起進階" : "進階：rank、region head"}</button>
-          {adv && <div className="row card"><label className="f">LoRA rank<select value={rank} onChange={(ev) => setRank(+ev.target.value)}>{[8, 16, 24, 32].map((r) => <option key={r} value={r}>{r}</option>)}</select></label><label className="row hint"><input type="checkbox" checked={regionHead} onChange={(ev) => setRegionHead(ev.target.checked)} /> 也訓 region head（座標頭；開了 Orin 載不了）</label></div>}
-          <div className="note">LoRA 只掛文字 MLP（Orin 的 Photon 可直接載入）。預設步數＝圖數×2（100–1000）；{autoSteps} 步約 {Math.round(autoSteps / 36)} 分鐘，訓完自動在 CCTV held-out 與各資料集的驗證集評估。</div>
+          <div className="small muted">步數預設 {autoSteps} ＝ {images} 張 × 2（100–1000）。LoRA rank {rank}、只掛文字 MLP，Orin 的 Photon 可直接載入。</div>
+          <Pop show={adv} className="row card"><label className="f">LoRA rank<select value={rank} onChange={(ev) => setRank(+ev.target.value)}>{[8, 16, 24, 32].map((r) => <option key={r} value={r}>{r}</option>)}</select></label><label className="row hint"><input type="checkbox" checked={regionHead} onChange={(ev) => setRegionHead(ev.target.checked)} /> 也訓 region head（座標頭；開了 Orin 載不了）</label></Pop>
         </div>
-        <div className="col">
-          <button className="primary big" onClick={start} disabled={blockers.length > 0}>{running ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : blockers.length ? "還不能訓練" : `開始訓練（${rows} 筆，${steps === "" ? autoSteps : steps} 步）`}</button>
-          {blockers.map((b) => <Pop key={b} className="bad hint">✗ {b}</Pop>)}
-          {warns.map((w) => <Pop key={w} className="warn hint">⚠ {w}</Pop>)}
-          {!blockers.length && <div className="small muted">會記為 {reviewer || "—"} 啟動；訓完自動評估 held-out 與驗證集。</div>}
-          <Stagger className="col">{runs.map((r) => <Item key={r.name}><RunRow r={r} onDelete={() => setAskDel(r.name)} onCancel={async () => { await api.cancelRun(r.name).catch((err) => say(String(err), "bad")); say("取消中…", "warn"); }} /></Item>)}</Stagger>
-          {runs.length === 0 && <div className="empty">還沒訓練過。</div>}
+
+        <div className="panel col">
+          <div className="step-h"><h3>訓練紀錄</h3><span className="muted hint">{runs.length ? `${runs.length} 次；點一列看曲線與分數` : "還沒訓練過"}</span></div>
+          {shown && <Fade k={shown.name}><RunCard r={shown} go={go} /></Fade>}
+          {runs.length > 0 && <div className="history">{runs.map((r) => <RunRow key={r.name} r={r} cur={r.name === shown?.name} onOpen={() => setOpenRun(r.name)} onDelete={() => setAskDel(r.name)} onCancel={async () => { await api.cancelRun(r.name).catch((err) => say(String(err), "bad")); say("取消中…", "warn"); }} />)}</div>}
         </div>
       </div>
-      <Stagger className="col">{runs.filter((r) => r.state !== "cancelled").slice(0, 3).map((r) => <Item key={r.name}><RunCard r={r} go={go} /></Item>)}</Stagger>
+
+      <div className="actions">
+        <button className="primary big" onClick={start} disabled={blockers.length > 0}>{running ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : blockers.length ? "還不能訓練" : `開始訓練 ${nameFinal}`}</button>
+        {blockers.map((b) => <Pop key={b} className="bad hint">✗ {b}</Pop>)}
+        <div className="panel col summary">
+          <b>這次會訓練</b>
+          <dl>
+            <dt>資料集</dt><dd>{chosen.length ? chosen.map((d) => d.name).join("＋") : "—"}</dd>
+            <dt>題目</dt><dd>{rows} 筆 · {images} 張圖</dd>
+            <dt>步數</dt><dd>{nSteps} 步 · 約 {Math.max(1, Math.round(nSteps / 36))} 分鐘</dd>
+            <dt>評分</dt><dd>工廠 CCTV{val ? ` ＋ ${chosen.filter((d) => d.val_images).length} 個驗證集（${val} 張）` : ""}</dd>
+          </dl>
+          <SkillMix counts={bySkill} />
+        </div>
+        {warns.map((w) => <Pop key={w} className="warn hint">⚠ {w}</Pop>)}
+        {!blockers.length && <div className="small muted">會記為 {reviewer || "—"} 啟動；過關＝工廠 CCTV 每個 skill ≥ base − 1 點且至少一個進步。</div>}
+      </div>
       <ConfirmDialog open={!!askDel} title={`刪除 ${askDel}？`} body="adapter、log、評估報告都會刪。" confirmText="刪除" danger onCancel={() => setAskDel(null)} onConfirm={async () => { await api.deleteRun(askDel!).catch((err) => say(String(err), "bad")); setAskDel(null); load(); }} />
     </div>
   );
 }
 
+/** Confirmed questions per skill as bars; under 20 is flagged (too few to learn from). */
+function SkillMix({ counts }: { counts: Record<SkillKey, number> }) {
+  const max = Math.max(1, ...SKILL_KEYS.map((k) => counts[k]));
+  return <div className="mix">{SKILL_KEYS.map((k) => [<span key={k + "a"} className={counts[k] > 0 && counts[k] < 20 ? "warn-text" : ""}>{k}</span>, <span key={k + "b"} className="b"><i style={{ width: `${(100 * counts[k]) / max}%` }} /></span>, <span key={k + "c"} className="v">{counts[k]}</span>])}</div>;
+}
+
 function autoName() { const d = new Date(); const p = (n: number) => String(n).padStart(2, "0"); return `ft-${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; }
 
-function RunRow({ r, onDelete, onCancel }: { r: Run; onDelete: () => void; onCancel: () => void }) {
+function RunRow({ r, cur, onOpen, onDelete, onCancel }: { r: Run; cur?: boolean; onOpen?: () => void; onDelete: () => void; onCancel: () => void }) {
   const pill = r.state === "running" ? <Pill kind="warn">{phaseLabel(r.phase)}{r.phase === "training" ? ` ${r.last?.step ?? 0}/${r.steps}` : ""}</Pill> : r.state === "done" ? (r.gate ? <Pill kind={r.gate.passed ? "ok" : "grey"}>{r.gate.passed ? "完成 · 比 base 好" : "完成 · 沒有比 base 好"}</Pill> : <Pill kind="ok">完成</Pill>) : r.state === "cancelled" ? <Pill kind="grey">取消</Pill> : <Pill kind="bad">失敗</Pill>;
   return (
-    <div className="panel row" style={{ justifyContent: "space-between" }}>
-      <span><b>{r.name}</b> <span className="muted small">{r.rows} 筆 · {r.steps} 步 · lr {r.lr}{r.datasets?.length ? ` · ${r.datasets.join("＋")}` : ""}</span></span>
-      <span className="row">{pill}{r.state === "running" ? <button onClick={onCancel}>取消</button> : <button className="ghost" onClick={onDelete} title="刪除 run">✕</button>}</span>
+    <div className={`it${cur ? " cur" : ""}`} onClick={onOpen}>
+      <span><b>{r.name}</b> <span className="muted small">{r.rows} 筆 · {r.steps} 步 · lr {r.lr}{r.datasets?.length ? ` · ${r.datasets.join("＋")}` : ""}{r.started ? ` · ${r.started.slice(5, 16).replace("T", " ")}` : ""}</span></span>
+      <span className="row" onClick={(e) => e.stopPropagation()}>{pill}{r.state === "running" ? <button onClick={onCancel}>取消</button> : <button className="ghost" onClick={onDelete} title="刪除 run" aria-label="刪除">✕</button>}</span>
     </div>
   );
 }

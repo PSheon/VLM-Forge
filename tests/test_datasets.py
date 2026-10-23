@@ -126,6 +126,7 @@ def test_dataset_flow(client, monkeypatch):
     from vlmforge.server import workspace as wsmod
 
     monkeypatch.setattr(wsmod, "SPOT_MIN", 0)
+    monkeypatch.setattr(wsmod, "SPOT_FRAC", 0)  # no spot sample: every agreed item goes auto
     ds = client.post(
         "/api/datasets",
         json={

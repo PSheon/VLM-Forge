@@ -1,55 +1,51 @@
-// ③ 測試 (docs/ui-spec §6): scores (base vs every run, held-out + val splits), per-item
-// diff, a single-image playground that can save into a dataset, and the Orin bundle.
+// ③ 測試 (docs/ui-spec §6): the scores are the page; 看差異 (per-item diff) and 試一張 (a
+// playground that can save into a dataset) are sub-views; the Orin bundle is a section in the
+// action column. Same pattern as the dataset page: no tab bar, ← / Esc goes back.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, defaultPrompt, emptyLabel, fmt, fmtDelta, phaseLabel, skillLabel, suiteLabel, summary, type Dataset, type HeldoutPair, type ImageRow, type Model, type Pred, type Run, type Skill } from "../api";
-import Canvas from "../components/Canvas";
+import Canvas, { type View } from "../components/Canvas";
 import ImagePicker from "../components/ImagePicker";
 import TextDiff from "../components/TextDiff";
-import { Pill, useToast } from "../components/ui";
+import { PageHead, Pill, Section, useEscBack, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
 import type { Step } from "../App";
 
-type Tab = "scores" | "diff" | "play" | "orin";
+type Sub = "scores" | "diff" | "play";
 const SKILLS: Skill[] = ["detect", "point", "query", "caption"];
 
 export default function Test({ models, reviewer, go }: { models: Model[]; reviewer: string; go: (s: Step) => void }) {
-  const [tab, setTab] = useState<Tab>("scores");
+  const [view, setView] = useState<Sub>("scores");
   const [data, setData] = useState<{ suites: string[]; base: Record<string, Record<string, number>>; runs: Run[] } | null>(null);
   const [diff, setDiff] = useState<{ run: string; suite: string } | null>(null);
   const load = () => api.testSummary().then(setData).catch(() => undefined);
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
+  const back = useCallback(() => setView("scores"), []);
+  useEscBack(view !== "scores", back);
   const done = data?.runs.filter((r) => r.state === "done" && Object.keys(r.evals).length) ?? [];
   const running = data?.runs.find((r) => r.state === "running");
   const suites = Array.from(new Set([...(data?.suites ?? []), ...done.flatMap((r) => Object.keys(r.evals))]));
-  const tabs: [Tab, string, string][] = [["scores", "分數", ""], ["diff", "看差異", done.length ? "" : "要先有訓練好的模型"], ["play", "試一張", ""], ["orin", "匯出到 Orin", done.length ? "" : "要先有訓練好的模型"]];
+  const status = running ? <Pill kind="warn">{running.name} {running.phase === "training" ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : phaseLabel(running.phase)}</Pill> : done.length ? <Pill kind="ok">{done.length} 個模型可比</Pill> : <Pill kind="grey">還沒有訓練好的模型</Pill>;
+  const head = (title: string, hint: string) => <PageHead back={view === "scores" ? undefined : { label: "← 分數", onClick: back }} title={title}>{status}<span className="muted hint">{hint}</span></PageHead>;
   return (
-    <div className="col">
-      <div className="row">
-        <h2>測試</h2>
-        {running ? <Pill kind="warn">{running.name} {running.phase === "training" ? `訓練中 ${running.last?.step ?? 0}/${running.steps}` : phaseLabel(running.phase)}</Pill> : done.length ? <Pill kind="ok">{done.length} 個模型可比</Pill> : <Pill kind="grey">還沒有訓練好的模型</Pill>}
-        <span className="muted hint">base＝原本的 Moondream；每個訓練好的模型都和它比</span>
-      </div>
-      <div className="tabs big">{tabs.map(([k, l, why]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)} disabled={!!why} title={why}>{l}</button>)}</div>
-      <Fade k={tab}>
-        {tab === "scores" && data && <Scores data={data} done={done} running={running} suites={suites} go={go} onDiff={(run, suite) => { setDiff({ run, suite }); setTab("diff"); }} />}
-        {tab === "diff" && <Diff runs={done} suites={suites} initial={diff} />}
-        {tab === "play" && <Play models={models} reviewer={reviewer} />}
-        {tab === "orin" && <Orin runs={done} />}
-      </Fade>
-    </div>
+    <Fade k={view}>
+      {view === "scores" && data && <Scores header={head("測試", "base＝原本的 Moondream；每個訓練好的模型都和它比")} data={data} done={done} running={running} suites={suites} go={go} onDiff={(run, suite) => { setDiff({ run, suite }); setView("diff"); }} onPlay={() => setView("play")} />}
+      {view === "diff" && <Diff header={head("看差異", "逐題比 base 和新模型")} runs={done} suites={suites} initial={diff} />}
+      {view === "play" && <Play header={head("試一張", "任何一張圖，問 base 和新模型")} models={models} reviewer={reviewer} />}
+      {view === "scores" && !data && <div className="page"><div className="col">{head("測試", "")}<div className="empty"><i className="spin" />載入中…</div></div><div className="actions" /></div>}
+    </Fade>
   );
 }
 
 const suiteKind = (s: string): ["target" | "val" | "ref", string] => (s === "heldout-cctv" ? ["target", "v1 目標考卷"] : s.startsWith("val-") ? ["val", "你的資料集留下的 10%"] : ["ref", "參考，不當目標"]);
 
-function Scores({ data, done, running, suites, go, onDiff }: { data: { base: Record<string, Record<string, number>> }; done: Run[]; running?: Run; suites: string[]; go: (s: Step) => void; onDiff: (run: string, suite: string) => void }) {
+function Scores({ header, data, done, running, suites, go, onDiff, onPlay }: { header: ReactNode; data: { base: Record<string, Record<string, number>> }; done: Run[]; running?: Run; suites: string[]; go: (s: Step) => void; onDiff: (run: string, suite: string) => void; onPlay: () => void }) {
+  const best = done[0];
+  const [orin, setOrin] = useState(false);
   return (
+    <div className="page">
     <div className="col">
-      <Pop show={!done.length} className="next">
-        <b>{running ? `${running.name} 訓練中，完成後這裡會多一欄` : "還沒有訓練好的模型"}</b>
-        <span className="hint">{running ? `第 ${running.last?.step ?? 0}/${running.steps} 步；訓完自動在每張考卷評分。` : <>下面是 base 的起點分數。<button className="ghost" onClick={() => go("train")} style={{ padding: "0 6px" }}>去訓練 →</button></>}</span>
-      </Pop>
+      {header}
       <div className="suites">
         {suites.map((s) => {
           const [kind, why] = suiteKind(s);
@@ -80,10 +76,18 @@ function Scores({ data, done, running, suites, go, onDiff }: { data: { base: Rec
       </div>
       <div className="muted hint">分數 0–1，越高越好：Detect／Point＝找對的比例（F1），Query／Caption＝答對的比例；綠紅小字＝比 base 高／低幾個百分點。考卷的圖從不進訓練。v1 目標：工廠 CCTV 的 Detect 和 Query 都不低於 base。</div>
     </div>
+    <div className="actions">
+      {best ? <button className="primary big" onClick={() => onDiff(best.name, "heldout-cctv")}>看 {best.name} 的差異 →</button> : <button className="primary big" onClick={() => go("train")} disabled={!!running}>{running ? `${running.name} 訓練中…` : "去訓練 →"}</button>}
+      <Pop show={!done.length} className="hint muted">{running ? `第 ${running.last?.step ?? 0}/${running.steps} 步；訓完自動在每張考卷評分，這裡會多一欄。` : "左邊是 base 的起點分數；訓一個模型後會多一欄。"}</Pop>
+      {best?.gate && <div className={`hint ${best.gate.passed ? "ok" : "bad"}`}>{best.name}：{best.gate.passed ? "比 base 好（工廠 CCTV）" : "沒有比 base 好（工廠 CCTV）"}</div>}
+      <div className="row hint"><button className="ghost" onClick={onPlay}>試一張圖 →</button>{best && <button className="ghost" onClick={() => onDiff(best.name, "heldout-cctv")}>看差異 →</button>}</div>
+      {done.length > 0 && <Section title="匯出到 Orin" summary={`${done.length} 個模型可匯出`} open={orin} onToggle={() => setOrin(!orin)}><Orin runs={done} /></Section>}
+    </div>
+    </div>
   );
 }
 
-function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initial: { run: string; suite: string } | null }) {
+function Diff({ header, runs, suites, initial }: { header: ReactNode; runs: Run[]; suites: string[]; initial: { run: string; suite: string } | null }) {
   const [run, setRun] = useState(initial?.run ?? runs[0]?.name ?? "");
   const [suite, setSuite] = useState(initial?.suite ?? "heldout-cctv");
   const [filter, setFilter] = useState<"changed" | "better" | "worse" | "all">("changed");
@@ -91,6 +95,8 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
   const [n, setN] = useState(0);
   const [cur, setCur] = useState(0);
   const [err, setErr] = useState("");
+  const [view, setView] = useState<View | null>(null); // both canvases zoom and pan together
+  useEffect(() => setView(null), [cur, run, suite]);
   const manifestStem = (s: string) => (s.startsWith("val-") ? `val-${s.slice(4)}` : s);
   useEffect(() => {
     if (!run || !suite) return;
@@ -108,7 +114,9 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
   const H = "calc(100vh - 330px)";
   const nBetter = shown.filter(better).length;
   return (
+    <div className="page">
     <div className="col">
+      {header}
       <div className="panel row">
         <label className="row">模型 <select value={run} onChange={(e) => setRun(e.target.value)}>{runs.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}</select></label>
         <label className="row">考卷 <select value={suite} onChange={(e) => setSuite(e.target.value)}>{suites.map((s) => <option key={s} value={s}>{suiteLabel(s)}</option>)}</select></label>
@@ -117,13 +125,12 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
         {err && <span className="bad hint">{err}</span>}
       </div>
       {pairs && (
-        <div className="rv-main">
           <Fade k={`${run}/${suite}/${cur}`} style={{ minWidth: 0 }}>
-            {p && <div className="row hint" style={{ marginBottom: 6 }}><Pill kind={better(p) ? "ok" : "bad"}>{better(p) ? "新模型較好" : "新模型較差"}</Pill><span className="muted">{p.row.skill} · {p.row.object ?? p.row.question ?? "caption"} · 第 {cur + 1}/{shown.length} 題 · ← → 換題</span></div>}
+            {p && <div className="row hint" style={{ marginBottom: 6 }}><Pill kind={better(p) ? "ok" : "bad"}>{better(p) ? "新模型較好" : "新模型較差"}</Pill><span className="muted">{p.row.skill} · {p.row.object ?? p.row.question ?? "caption"} · 第 {cur + 1}/{shown.length} 題 · ← → 換題 · 兩張圖同步縮放</span></div>}
             {p && (p.row.skill === "detect" || p.row.skill === "point") && (
               <div className="grid-2">
-                <div><div className="muted hint">base（實線）vs 正解（虛線）· {score(p.base)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.base.pred)} alt={gt(p.row)} readOnly labels={{ main: "base", alt: "正解" }} height={H} compact /></div>
-                <div><div className="muted hint">{run}（實線）vs 正解（虛線）· {score(p.adapter)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.adapter.pred)} alt={gt(p.row)} readOnly labels={{ main: run, alt: "正解" }} height={H} compact /></div>
+                <div><div className="muted hint">base（實線）vs 正解（虛線）· {score(p.base)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.base.pred)} alt={gt(p.row)} readOnly labels={{ main: "base", alt: "正解" }} height={H} compact sync={view} onSync={setView} /></div>
+                <div><div className="muted hint">{run}（實線）vs 正解（虛線）· {score(p.adapter)}</div><Canvas src={api.imageUrl(p.image_id, 2048)} skill={p.row.skill} value={asPred(p.row.skill, p.adapter.pred)} alt={gt(p.row)} readOnly labels={{ main: run, alt: "正解" }} height={H} compact sync={view} onSync={setView} /></div>
               </div>
             )}
             {p && p.row.skill !== "detect" && p.row.skill !== "point" && (
@@ -134,9 +141,13 @@ function Diff({ runs, suites, initial }: { runs: Run[]; suites: string[]; initia
             )}
             {!p && <div className="empty">這個篩選沒有題。</div>}
           </Fade>
-          <aside className="panel"><div className="list" style={{ maxHeight: "calc(100vh - 280px)" }}>{shown.map((q, i) => <div key={i} className={`it${i === cur ? " cur" : ""}`} onClick={() => setCur(i)}>{i + 1}. {q.row.skill} {q.row.object ?? q.row.question} <span className={better(q) ? "ok" : "bad"}>{score(q.base)} → {score(q.adapter)}</span></div>)}</div><div className="muted hint">框題＝對/多/漏 的數量，文字題＝✓/✗；綠＝新模型比 base 好。</div></aside>
-        </div>
       )}
+    </div>
+    <div className="actions">
+      <div className="row"><button onClick={() => setCur((c) => Math.max(0, c - 1))} disabled={cur <= 0} title="←">←</button><button className="primary big" onClick={() => setCur((c) => Math.min(shown.length - 1, c + 1))} disabled={!shown.length || cur >= shown.length - 1}>下一題 → <kbd>→</kbd></button></div>
+      {pairs && <div className="list" style={{ maxHeight: "calc(100vh - 220px)" }}>{shown.map((q, i) => <div key={i} className={`it${i === cur ? " cur" : ""}`} onClick={() => setCur(i)}>{i + 1}. {q.row.skill} {q.row.object ?? q.row.question} <span className={better(q) ? "ok" : "bad"}>{score(q.base)} → {score(q.adapter)}</span></div>)}</div>}
+      <div className="muted hint">框題＝對/多/漏 的數量，文字題＝✓/✗；綠＝新模型比 base 好。</div>
+    </div>
     </div>
   );
   function score(x: HeldoutPair["base"]) { return x.tp_fp_fn ? x.tp_fp_fn.join("/") : x.ok ? "✓" : "✗"; }
@@ -150,7 +161,7 @@ const QUICK: [Skill, string][] = [
   ["detect", "person"], ["detect", "forklift"], ["detect", "helmet"], ["point", "person"], ["caption", "normal"],
 ];
 
-function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
+function Play({ header, models, reviewer }: { header: ReactNode; models: Model[]; reviewer: string }) {
   const { say } = useToast();
   const [image, setImage] = useState<ImageRow | null>(null);
   const [skill, setSkill] = useState<Skill>("detect");
@@ -161,6 +172,7 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [saveTo, setSaveTo] = useState<number | "">("");
   const [label, setLabel] = useState<Pred | null>(null);
+  const [view, setView] = useState<View | null>(null);
   useEffect(() => { api.datasets().then(setDatasets).catch(() => undefined); }, []);
   useEffect(() => { if (!image) api.images().then((im) => { if (im.length) setImage(im[0]); }).catch(() => undefined); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setRes(null); setLabel(null); }, [image?.id, skill]);
@@ -181,14 +193,17 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
   const lbl = (n: string) => models.find((m) => m.name === n)?.label ?? n;
   const pick = (s: Skill, p: string) => { setSkill(s); setPrompt(p); };
   return (
-    <div className="grid-3">
+    <div className="page">
+    <div className="col">
+    {header}
+    <div className="play-left">
       <aside className="panel"><ImagePicker value={image?.id ?? null} onPick={setImage} /></aside>
       <section className="col" style={{ minWidth: 0 }}>
         {image && <div className="row hint"><span className="muted">{image.path.split("/").slice(-1)[0]}</span>{res && <><Pill kind="grey">base · {summary(pa)} · {res.base.ms} ms</Pill>{b !== "base" && res[b] && <Pill kind="ok">{lbl(b)} · {summary(pb)} · {res[b].ms} ms</Pill>}</>}{busy && <span className="muted"><i className="spin" />模型在答…</span>}</div>}
         {image && res && spatial && (b === "base" ? <Canvas src={src} skill={skill} value={label ?? pa} onChange={(p) => setLabel(p)} labels={{ main: "base（可改後存）" }} height={H} compact /> : (
           <div className="grid-2">
-            <div><div className="muted hint">base</div><Canvas src={src} skill={skill} value={pa} alt={pb} readOnly labels={{ main: "base", alt: lbl(b) }} height={H} compact /></div>
-            <div><div className="muted hint">{lbl(b)}</div><Canvas src={src} skill={skill} value={pb} alt={pa} readOnly labels={{ main: lbl(b), alt: "base" }} height={H} compact /></div>
+            <div><div className="muted hint">base</div><Canvas src={src} skill={skill} value={pa} alt={pb} readOnly labels={{ main: "base", alt: lbl(b) }} height={H} compact sync={view} onSync={setView} /></div>
+            <div><div className="muted hint">{lbl(b)}</div><Canvas src={src} skill={skill} value={pb} alt={pa} readOnly labels={{ main: lbl(b), alt: "base" }} height={H} compact sync={view} onSync={setView} /></div>
           </div>
         ))}
         {image && res && !spatial && (
@@ -203,42 +218,45 @@ function Play({ models, reviewer }: { models: Model[]; reviewer: string }) {
         {image && !res && <Canvas src={src} skill={skill} value={null} readOnly height={H} compact />}
         {!image && <div className="empty">左邊選一張圖。</div>}
       </section>
-      <aside className="panel col">
+    </div>
+    </div>
+      <div className="actions">
+        <button className="primary big" onClick={run} disabled={!image || busy}>{busy ? "執行中…" : !image ? "先選一張圖" : `執行：${skillLabel[skill]} ${short(prompt)} ⏎`}</button>
         <div className="tabs">{SKILLS.map((s) => <button key={s} className={s === skill ? "cur" : ""} onClick={() => pick(s, defaultPrompt(s))}>{skillLabel[s]}</button>)}</div>
         <label className="f">{skill === "query" ? "問題" : skill === "caption" ? "長度（short / normal / long）" : "找什麼"}<input value={prompt} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && run()} /></label>
         <div className="chips">{QUICK.map(([s, p]) => <button key={s + p} className={`chip-btn${s === skill && p === prompt ? " on" : ""}`} onClick={() => pick(s, p)} title={skillLabel[s]}>{s === "query" ? p : `${skillLabel[s]}: ${p}`}</button>)}</div>
         <label className="f">和 base 比的模型<select value={b} onChange={(e) => setB(e.target.value)}>{models.map((m) => <option key={m.name} value={m.name}>{m.name === "base" ? "只跑 base" : m.label}</option>)}</select></label>
-        <button className="primary big" onClick={run} disabled={!image || busy}>{busy ? "執行中…" : !image ? "先選一張圖" : "執行 ⏎"}</button>
         <Pop show={!!res} className="col card">
           <div className="hint muted">把畫面上的答案存成資料集的題（視為已確認）：</div>
           <div className="row"><select value={saveTo} onChange={(e) => setSaveTo(e.target.value === "" ? "" : +e.target.value)}><option value="">選資料集</option>{datasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select><button onClick={save} disabled={saveTo === "" || !(label ?? pa)}>存成題</button></div>
           {!label && <div className="hint muted">{summary(pa ?? emptyLabel(skill))}</div>}
         </Pop>
-      </aside>
+      </div>
     </div>
   );
 }
 
+const short = (t: string) => (t.length > 26 ? t.slice(0, 26) + "…" : t);
+
 function Orin({ runs }: { runs: Run[] }) {
   const [sel, setSel] = useState(runs[0]?.name ?? "");
+  const [code, setCode] = useState(false);
   const r = runs.find((x) => x.name === sel);
   return (
-    <div className="grid-2">
-      <div className="panel col">
-        <h3>匯出到 Orin AGX</h3>
-        <label className="f">模型<select value={sel} onChange={(e) => setSel(e.target.value)}>{runs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}</select></label>
-        {r && <div className="row hint"><Pill kind={r.region_head ? "warn" : "ok"}>{r.region_head ? "有 region head：Photon 載不了，只能在 Forge 跑" : "Photon 相容（只掛文字 MLP）"}</Pill><span className="muted">r{r.rank} · {r.rows} 筆 · {r.steps} 步</span></div>}
-        <a className="btn primary" href={r ? api.orinUrl(r.name) : "#"} aria-disabled={!r}>下載 adapter 包（adapter.pt、local_adapter.py、README、bench_orin.py、scores.json）</a>
-        <pre className="code">{`pip install moondream          # 帶 kestrel（Photon）
+    <>
+      <label className="f">模型<select value={sel} onChange={(e) => setSel(e.target.value)}>{runs.map((x) => <option key={x.name} value={x.name}>{x.name}</option>)}</select></label>
+      {r && <div className="col hint"><Pill kind={r.region_head ? "warn" : "ok"}>{r.region_head ? "有 region head：Photon 載不了，只能在 Forge 跑" : "Photon 相容（只掛文字 MLP）"}</Pill><span className="muted">r{r.rank} · {r.rows} 筆 · {r.steps} 步</span></div>}
+      <a className="btn" href={r ? api.orinUrl(r.name) : "#"} aria-disabled={!r} style={{ textAlign: "center" }}>下載 adapter 包（zip）</a>
+      <div className="muted small">內含 adapter.pt、local_adapter.py、README.md、bench_orin.py、scores.json。官方 client 的 adapter 只認雲端 id，所以附 local_adapter.py 從本機檔載。</div>
+      <button className="ghost" onClick={() => setCode(!code)} style={{ alignSelf: "flex-start" }}>{code ? "收起用法" : "Orin 上怎麼用 ▾"}</button>
+      {code && <pre className="code" style={{ fontSize: 11 }}>{`pip install moondream   # 帶 kestrel
 from PIL import Image
 from local_adapter import Tuned
 m = Tuned("adapter.pt")
 img = Image.open("frame.jpg")
-m.detect(img, "person"); m.query(img, "Is anyone without a helmet?")
-m.base.detect(img, "person")   # 同一個 engine 跑 base 對照`}</pre>
-        <div className="muted hint">官方 client 的 adapter 只認雲端 id，所以包裡附 <code>local_adapter.py</code>（kestrel 的 AdapterProvider，從本機檔載）。Orin 上跑 <code>python bench_orin.py --images ./frames --adapter adapter.pt</code> 量延遲（base vs adapter，每題毫秒，寫到 bench.json）；分數不在 Orin 上算。</div>
-      </div>
-      <div className="panel col"><h3>分數（這個模型）</h3>{r && Object.entries(r.evals).map(([s, m]) => <div key={s} className="hint">{suiteLabel(s)}：{Object.entries(m).map(([k, v]) => `${k} ${fmt(v)}`).join(" · ")}</div>)}{r?.gate && <div className={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "比 base 好" : "沒有比 base 好"}</div>}</div>
-    </div>
+m.detect(img, "person")
+m.base.detect(img, "person")  # base 對照
+# 延遲：python bench_orin.py --images ./frames`}</pre>}
+    </>
   );
 }

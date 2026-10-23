@@ -1,6 +1,6 @@
 [project]
 name = "vlmforge"
-version = "0.1.0"
+version = "0.2.0"
 description = "VLM-Forge: LoRA fine-tuning, evaluation and human-supervision UI for Moondream 3.1"
 requires-python = ">=3.12"
 license = "MIT"

@@ -65,6 +65,7 @@ export interface Batch {
   dataset_id?: number | null;
   job?: Job | null;
   unfinished?: { images: number; unpredicted: number; unjudged: number }; // autogen batches only
+  images_pending?: number;
 }
 
 export interface DatasetConfig { mode?: "auto" | "both" | "fixed"; fixed?: string; topics?: string[]; focus?: string; skills?: Skill[] }

@@ -4,12 +4,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, parseFixed, phaseLabel, type Batch, type Dataset, type GridCell, type Skill, type Status } from "../api";
-import { Bar, ConfirmDialog, Dialog, Pill, eta, useToast } from "../components/ui";
+import { Bar, ConfirmDialog, Dialog, PageHead, Pill, Section, eta, useToast } from "../components/ui";
 import { Fade, Item, Pop, Stagger } from "../components/motion";
 import Review from "./Review";
 import type { Step } from "../App";
 
-type Tab = "images" | "review" | "settings" | "export";
+type View = "images" | "review"; // the image grid, or the one-question-at-a-time review
 
 export default function Datasets({ status, refresh, go, reviewer, setGuard }: { status: Status | null; refresh: () => void; go: (s: Step) => void; reviewer: string; setGuard: (g: (() => boolean) | null) => void }) {
   const [list, setList] = useState<Dataset[]>([]);
@@ -19,16 +19,21 @@ export default function Datasets({ status, refresh, go, reviewer, setGuard }: { 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
   const detail = list.find((d) => d.id === cur) ?? null;
   if (detail) return <Detail key={detail.id} d={detail} status={status} reload={() => { load(); refresh(); }} go={go} reviewer={reviewer} setGuard={setGuard} onBack={() => setCur(null)} onDeleted={() => { setCur(null); load(); }} />;
+  const tot = (k: "images" | "items" | "trainable" | "images_pending") => list.reduce((a, d) => a + (d[k] ?? 0), 0);
   return (
-    <div className="col">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2>資料集</h2>
-        <button className="primary" onClick={() => setShowNew(true)}>＋ 新資料集</button>
+    <div className="page">
+      <div className="col">
+        <PageHead title="資料集"><span className="muted hint">一個資料集＝一批照片＋AI 導師出的題＋你確認的答案</span></PageHead>
+        {list.length === 0 && <div className="empty">還沒有資料集。建一個，把照片丟進去，AI 導師先標一輪，你再檢查。</div>}
+        <Stagger className="cards">
+          {list.map((d) => <Item key={d.id}><DatasetCard d={d} onClick={() => setCur(d.id)} /></Item>)}
+        </Stagger>
       </div>
-      {list.length === 0 && <div className="empty">還沒有資料集。建一個，把照片丟進去，AI 導師先標一輪，你再檢查。</div>}
-      <Stagger className="cards">
-        {list.map((d) => <Item key={d.id}><DatasetCard d={d} onClick={() => setCur(d.id)} /></Item>)}
-      </Stagger>
+      <div className="actions">
+        <button className="primary big" onClick={() => setShowNew(true)}>＋ 新資料集</button>
+        {list.length > 0 && <div className="stat" style={{ flexWrap: "wrap" }}><span>資料集 <b>{list.length}</b></span><span>圖 <b>{tot("images")}</b></span><span>題 <b>{tot("items")}</b></span><span>已確認 <b>{tot("trainable")}</b></span><span>還要看 <b>{tot("images_pending")}</b> 張</span></div>}
+        <div className="hint muted">可以陸續加圖、重複標註；每個資料集自動留 10% 當驗證集。</div>
+      </div>
       <NewDataset open={showNew} existing={list.map((d) => d.name)} onClose={() => setShowNew(false)} onCreated={(d) => { setShowNew(false); load(); setCur(d.id); }} />
     </div>
   );
@@ -84,7 +89,8 @@ function NewDataset({ open, existing, onClose, onCreated }: { open: boolean; exi
 
 function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }: { d: Dataset; status: Status | null; reload: () => void; go: (s: Step) => void; reviewer: string; setGuard: (g: (() => boolean) | null) => void; onBack: () => void; onDeleted: () => void }) {
   const { say } = useToast();
-  const [tab, setTab] = useState<Tab>("images");
+  const [tab, setTab] = useState<View>("images");
+  const [openSec, setOpenSec] = useState<"" | "teacher" | "export">("");
   const [openImage, setOpenImage] = useState<string | null>(null);
   const [full, setFull] = useState<Dataset | null>(null);
   const [grid, setGrid] = useState<GridCell[]>([]);
@@ -143,23 +149,36 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const lowMem = freeGb !== null && !judgeLoaded && freeGb < needGb;
   const labelText = interrupted(batch) ? "先把上一輪接著跑完" : !judgeOk ? "出題模型缺，不能標" : gpuBusy ? "排隊中…（GPU 忙）" : lowMem ? `GPU 只剩 ${freeGb!.toFixed(0)} GB（出題要 ${needGb} GB），等別的訓練結束` : unlabelled === 0 ? "沒有新圖" : `標註新加的 ${n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張`;
   const total = (full ?? d).images;
+  const pendingImgs = (full ?? d).images_pending, trainable = (full ?? d).trainable;
+  const labelBlocked = !judgeOk || gpuBusy || lowMem || (mode !== "auto" && nFixed === 0);
+  // one orange button: the next thing to do (docs/ui-spec §3)
+  const cta: { text: string; run?: () => void; disabled?: boolean } | null = interrupted(batch) ? null
+    : total === 0 ? { text: "選照片加進來", run: () => fileInput.current?.click(), disabled: busy }
+    : running ? { text: `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}`, disabled: true }
+    : unlabelled > 0 && !labelBlocked ? { text: labelText, run: label, disabled: busy }
+    : pendingImgs > 0 ? { text: `去檢查（還有 ${pendingImgs} 張）→`, run: () => setTab("review") }
+    : unlabelled > 0 ? { text: labelText, disabled: true }
+    : trainable > 0 ? { text: `已確認 ${trainable} 題 → 去訓練`, run: () => go("train") }
+    : null;
   const skippedNote = batch?.job?.student_error ? `模型沒作答（${batch.job.student_error}），這批全部交給你看` : null;
   const [pillText, pillKind] = statusPill(full ?? d);
-  const tabs: [Tab, string][] = [["images", `圖片 ${full?.images ?? d.images}`], ["review", `檢查${(full ?? d).images_pending ? ` ${(full ?? d).images_pending}` : ""}`], ["settings", "設定"], ["export", "匯出"]];
-
+  // title row inside the left column, so the action column (and its primary button) starts at
+  // the same height as on every other page. No tab bar: the grid is the page, review opens from
+  // a thumbnail or the primary button, settings and export live in the action column.
+  const header = (
+    <PageHead back={tab === "review" ? { label: `← 全部圖片（${total}）`, onClick: () => setTab("images") } : { label: "← 資料集", onClick: onBack }} title={rename ? <span className="row"><input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doRename(); if (e.key === "Escape") setRename(false); }} style={{ width: 220, fontSize: 15 }} /><button className="primary" onClick={doRename}>存</button><button onClick={() => setRename(false)}>取消</button></span> : <>{d.name}<button className="ghost" onClick={() => setRename(true)} title="改名" aria-label="改名">✎</button></>}>
+      <Pill kind={pillKind} onClick={tab === "images" && pendingImgs > 0 ? () => setTab("review") : undefined}>{pillText}</Pill>
+      <span className="small muted">{(full ?? d).items ? `題 ${(full ?? d).items} · 已確認 ${(full ?? d).trainable} · ` : ""}驗證集 {(full ?? d).val_images} 張</span>
+    </PageHead>
+  );
+  const modeText = mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`;
   return (
     <div className="col">
-      <div className="row">
-        <button className="ghost" onClick={onBack}>← 資料集</button>
-        {rename ? <><input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doRename(); if (e.key === "Escape") setRename(false); }} style={{ width: 220 }} /><button className="primary" onClick={doRename}>存</button><button onClick={() => setRename(false)}>取消</button></> : <><h2>{d.name}</h2><button className="ghost" onClick={() => setRename(true)} title="改名">✎</button></>}
-        <Pill kind={pillKind}>{pillText}</Pill>
-        <span className="small muted">{(full ?? d).items ? `題 ${(full ?? d).items} · 已確認 ${(full ?? d).trainable} · ` : ""}驗證集 {(full ?? d).val_images} 張</span>
-      </div>
-      <div className="tabs big">{tabs.map(([k, l]) => <button key={k} className={tab === k ? "cur" : ""} onClick={() => setTab(k)}>{l}</button>)}</div>
       <Fade k={tab}>
       {tab === "images" && (
-        <div className="grid-2">
+        <div className="page">
           <div className="col">
+            {header}
             <div className={`drop${drag ? " on" : ""}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}>
               把照片拖到這裡，或 <button onClick={() => fileInput.current?.click()} disabled={busy}>選檔案</button>（可多張、可 zip）
               <input ref={fileInput} type="file" accept="image/*,.zip" multiple hidden onChange={(e) => addFiles(e.target.files)} />
@@ -168,63 +187,56 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
               <input placeholder="GB300 上的資料夾路徑，例如 /home/paul/VLM-Forge/workspace/captures/1026" value={dir} onChange={(e) => setDir(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addFolder()} style={{ flex: 1 }} />
               <button onClick={addFolder} disabled={busy || !dir.trim()}>加入資料夾</button>
             </div>
-            <div className="small muted">{grid.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 點一張進去檢查` : "還沒有圖"}</div>
+            <div className="small muted">{grid.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查` : "還沒有圖"}</div>
             <Grid cells={grid} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
-          <div className="col">
-            <Pop show={total === 0} className="next"><b>下一步：把照片丟進來</b><span className="hint">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</span></Pop>
+          <div className="actions">
+            {cta && <button className="primary big" onClick={cta.run} disabled={cta.disabled}>{cta.text}</button>}
+            <Pop show={total === 0} className="hint muted">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</Pop>
+            <Pop show={total > 0 && unlabelled > 0 && !running && !interrupted(batch) && !labelBlocked} className="hint muted">{modeText}，約 20 秒/張；一致的自動通過，不一致的才要你看。</Pop>
+            {total > 0 && mode !== "auto" && nFixed === 0 && <div className="bad hint">AI 導師設定裡還沒有有效的指定題目</div>}
+            <div className="row hint">
+              {cta?.run !== label && unlabelled > 0 && !running && !interrupted(batch) && <span className="muted">{labelBlocked ? labelText : ""}</span>}
+              {cta && !cta.text.startsWith("去檢查") && pendingImgs > 0 && !running && <button className="ghost" onClick={() => setTab("review")}>去檢查（{pendingImgs} 張）→</button>}
+              {cta && !cta.text.includes("去訓練") && trainable > 0 && <button className="ghost" onClick={() => go("train")}>去訓練（{trainable} 題）→</button>}
+            </div>
             {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
-            <Pop show={total > 0 && unlabelled > 0 && !running && !interrupted(batch)} className="next"><b>下一步：讓 AI 導師先標 {n === "" ? unlabelled : Math.min(Number(n), unlabelled)} 張</b><span className="hint">{mode === "auto" ? "自動出題" : mode === "both" ? `自動出題＋指定 ${nFixed} 題` : `只指定 ${nFixed} 題`}，約 20 秒/張；一致的自動通過，不一致的到「檢查」。</span></Pop>
-            {total > 0 && <button className="primary big" onClick={label} disabled={busy || running || interrupted(batch) || !judgeOk || gpuBusy || lowMem || unlabelled === 0 || (mode !== "auto" && nFixed === 0)}>{running ? `標註中 ${batch?.job?.done ?? 0}/${batch?.job?.total ?? 0}` : labelText}</button>}
-            {total > 0 && mode !== "auto" && nFixed === 0 && <div className="bad hint">「設定」裡還沒有有效的指定題目</div>}
-            {(full ?? d).images_pending > 0 && !running && <button onClick={() => setTab("review")}>去檢查（還有 {(full ?? d).images_pending} 張）→</button>}
-            {(full ?? d).trainable > 0 && <button onClick={() => go("train")}>已確認 {(full ?? d).trainable} 題 → 去訓練</button>}
             {full && full.batches && full.batches.length > 1 && (
               <div className="col"><strong className="small">批次紀錄</strong>{full.batches.slice(1, 6).map((b) => <div key={b.id} className="small muted">{b.created_at.slice(5, 16).replace("T", " ")} · {b.total} 題 · {b.job?.state === "cancelled" ? "取消" : b.job?.state === "error" ? "失敗" : "完成"} · 一致 {b.verdicts?.accept ?? 0} · 不一致 {b.verdicts?.fix ?? 0}</div>)}</div>
             )}
-          </div>
-        </div>
-      )}
 
-      {tab === "review" && <Review reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} />}
+            <Section title="AI 導師設定" summary={`${modeText}${cfgDirty ? " · 改了還沒存" : ""}`} open={openSec === "teacher"} onToggle={() => setOpenSec(openSec === "teacher" ? "" : "teacher")} dirty={cfgDirty}>
+              <label className="row hint"><input type="radio" name="mode" checked={mode === "auto"} onChange={() => setMode("auto")} /> 自動出題（物件、問答、巡檢題、caption）</label>
+              <label className="row hint"><input type="radio" name="mode" checked={mode === "both"} onChange={() => setMode("both")} /> 自動出題＋指定題目</label>
+              <label className="row hint"><input type="radio" name="mode" checked={mode === "fixed"} onChange={() => setMode("fixed")} /> 只指定題目</label>
+              {mode !== "auto" && (
+                <>
+                  <textarea value={fixed} onChange={(e) => setFixed(e.target.value)} placeholder={"每行一題，例如：\ndetect: person, helmet\npoint: person\nquery: Is anyone without a helmet?\ncaption: normal"} style={{ minHeight: 110, fontFamily: "var(--mono)", fontSize: 12 }} />
+                  <div className="hint">{nFixed > 0 ? <span className="ok">✓ {nFixed} 題有效（detect {parsed.ok.detect.length}、point {parsed.ok.point.length}、query {parsed.ok.query.length}、caption {parsed.ok.caption.length}）</span> : <span className="muted">還沒有有效的題</span>}{parsed.bad.length > 0 && <span className="bad"> · ✗ 第 {parsed.bad.join("、")} 行看不懂（要像 <code>detect: person</code>）</span>}</div>
+                </>
+              )}
+              <label className="f">額外巡檢主題（每行一個；已內建值班、安全帽／背心／口罩／手套、出口、門、地面、堆高機、燈、管制區、無人看管物品）<textarea value={topics} onChange={(e) => setTopics(e.target.value)} style={{ minHeight: 54 }} /></label>
+              <label className="f">側重（給導師的一句話）<input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="例如 night-shift factory floor" /></label>
+              <div className="f"><span>出哪些 skill</span><div className="row">{(["detect", "point", "query", "caption"] as Skill[]).map((s) => <label key={s} className="row hint"><input type="checkbox" checked={skills.includes(s)} onChange={(e) => setSkills(e.target.checked ? [...skills, s] : skills.filter((x) => x !== s))} />{s}</label>)}</div></div>
+              <label className="f">一次只標幾張（空＝全部還沒標的）<input type="number" min={1} value={n} onChange={(e) => setN(e.target.value === "" ? "" : +e.target.value)} style={{ width: 120 }} /></label>
+              <div className="row"><button onClick={saveConfig} disabled={!cfgDirty}>{cfgDirty ? "儲存設定" : "已儲存"}</button><span className="muted small">按「標註」時也會自動存；已出的題不變。</span></div>
+            </Section>
 
-      {tab === "settings" && (
-        <div className="grid-2">
-          <div className="col panel">
-            <h3>AI 導師怎麼標</h3>
-            <label className="row"><input type="radio" name="mode" checked={mode === "auto"} onChange={() => setMode("auto")} /> 自動出題（導師看圖決定物件、問答、巡檢題、caption）</label>
-            <label className="row"><input type="radio" name="mode" checked={mode === "both"} onChange={() => setMode("both")} /> 自動出題＋指定題目</label>
-            <label className="row"><input type="radio" name="mode" checked={mode === "fixed"} onChange={() => setMode("fixed")} /> 只指定題目</label>
-            {mode !== "auto" && (
-              <>
-                <textarea value={fixed} onChange={(e) => setFixed(e.target.value)} placeholder={"每行一題，例如：\ndetect: person, helmet\npoint: person\nquery: Is anyone without a helmet?\ncaption: normal"} style={{ minHeight: 110, fontFamily: "var(--mono)", fontSize: 13 }} />
-                <div className="hint">{nFixed > 0 ? <span className="ok">✓ {nFixed} 題有效（detect {parsed.ok.detect.length}、point {parsed.ok.point.length}、query {parsed.ok.query.length}、caption {parsed.ok.caption.length}）</span> : <span className="muted">還沒有有效的題</span>}{parsed.bad.length > 0 && <span className="bad"> · ✗ 第 {parsed.bad.join("、")} 行看不懂（要像 <code>detect: person</code>）</span>}</div>
-              </>
-            )}
-            <div className="row"><button className="primary" onClick={saveConfig} disabled={!cfgDirty}>{cfgDirty ? "儲存設定" : "已儲存"}</button><span className="muted hint">下次按「標註」會用這組設定；已出的題不變。</span></div>
-          </div>
-          <div className="col panel">
-            <h3>進階</h3>
-            <label className="f">額外巡檢主題（每行一個；預設已含值班人員、安全帽／背心／口罩／手套、出口阻擋、門、地面、堆高機、燈、管制區、無人看管物品）<textarea value={topics} onChange={(e) => setTopics(e.target.value)} style={{ minHeight: 60 }} /></label>
-            <label className="f">側重（給導師的一句話）<input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="例如 night-shift factory floor" /></label>
-            <div className="f"><span>出哪些 skill</span><div className="row">{(["detect", "point", "query", "caption"] as Skill[]).map((s) => <label key={s} className="row hint"><input type="checkbox" checked={skills.includes(s)} onChange={(e) => setSkills(e.target.checked ? [...skills, s] : skills.filter((x) => x !== s))} />{s}</label>)}</div></div>
-            <label className="f">一次只標幾張（空＝全部還沒標的）<input type="number" min={1} value={n} onChange={(e) => setN(e.target.value === "" ? "" : +e.target.value)} style={{ width: 120 }} /></label>
+            <Section title="匯出" summary={exp ? `已匯出 ${exp.rows} 列` : `${trainable} 題可匯出`} open={openSec === "export"} onToggle={() => setOpenSec(openSec === "export" ? "" : "export")}>
+              <div className="hint muted">已確認的題 → jsonl（座標 0–1，含 split 欄）＋ 圖 zip。訓練不需要先匯出，這是給別的工具用的。</div>
+              <button onClick={doExport} disabled={busy || !trainable}>匯出 {trainable} 題</button>
+              {exp && <div className="hint">寫到 <code>{exp.jsonl}</code> · <a href={api.downloadUrl(d.id, "jsonl")}>下載 jsonl</a>{exp.zip && <> · <a href={api.downloadUrl(d.id, "zip")}>下載圖 zip（{exp.images} 張）</a></>}</div>}
+            </Section>
+
             <div className="danger-zone">
-              <div className="small muted">建立 {d.created_at.slice(0, 16).replace("T", " ")} · 更新 {d.updated_at.slice(0, 16).replace("T", " ")}</div>
-              <button className="ghost bad" onClick={() => setAskDelete(true)}>刪除這個資料集…</button>
+              <div className="small muted">建立 {d.created_at.slice(0, 16).replace("T", " ")}</div>
+              <button className="ghost bad" onClick={() => setAskDelete(true)}>刪除資料集…</button>
             </div>
           </div>
         </div>
       )}
 
-      {tab === "export" && (
-        <div className="panel col" style={{ maxWidth: 720 }}>
-          <h3>匯出</h3>
-          <div className="hint muted">已確認的題（人確認＋自動通過）→ jsonl（座標 0–1，含 split 欄）＋ 圖的 zip。</div>
-          <button className="primary" onClick={doExport} disabled={busy || !(full ?? d).trainable}>匯出 {(full ?? d).trainable} 題</button>
-          {exp && <div className="hint">寫到 <code>{exp.jsonl}</code>（{exp.rows} 列）· <a href={api.downloadUrl(d.id, "jsonl")}>下載 jsonl</a>{exp.zip && <> · <a href={api.downloadUrl(d.id, "zip")}>下載圖 zip（{exp.images} 張）</a></>}</div>}
-        </div>
-      )}
+      {tab === "review" && <Review reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} header={header} onExit={() => setTab("images")} />}
       </Fade>
       <ConfirmDialog open={askDelete} title={`刪除 ${d.name}？`} body="只刪資料集與歸屬；圖和題留在工作區。" confirmText="刪除" typed={d.name} danger onCancel={() => setAskDelete(false)} onConfirm={doDelete} />
     </div>
@@ -249,7 +261,7 @@ function BatchCard({ b, onCancel, onResume, busy, skippedNote }: { b: Batch; onC
         </>
       )}
       {state === "running" && <><Bar done={j!.done} total={j!.total} /><div className="small">{phaseLabel(j!.phase)} {j!.done}/{j!.total}{left !== null ? `（約還要 ${left} 分鐘）` : j!.done === 0 ? "（載入出題模型中…）" : ""}</div></>}
-      {state === "done" && <div className="small">{b.total} 題 · 一致 {b.verdicts?.accept ?? 0} · 不一致 {b.verdicts?.fix ?? 0} · 自動通過 {b.counts.auto ?? 0} · 還要看 {b.counts.pending ?? 0}</div>}
+      {state === "done" && <div className="small">{b.total} 題 · 一致 {b.verdicts?.accept ?? 0} · 不一致 {b.verdicts?.fix ?? 0} · 自動通過 {b.counts.auto ?? 0} · 還要看 {b.counts.pending ?? 0} 題{b.images_pending !== undefined ? `（${b.images_pending} 張）` : ""}</div>}
       {state === "cancelled" && <div className="small warn-text">已取消：出好的 {b.total} 題保留</div>}
       {state === "error" && <div className="small bad">失敗（{phaseLabel(j?.phase)}）：{j?.error}</div>}
       {skippedNote && <div className="warn hint">{skippedNote}</div>}

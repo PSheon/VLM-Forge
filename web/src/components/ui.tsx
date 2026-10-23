@@ -1,7 +1,7 @@
 // Shared UI pieces: toasts (docs/ui-spec §7), dialogs, pills, the name dialog, key help.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion } from "./motion";
+import { AnimatePresence, Pop, motion } from "./motion";
 
 type ToastKind = "ok" | "warn" | "bad";
 interface Toast { id: number; text: string; kind: ToastKind; action?: { label: string; run: () => void }; sticky?: boolean }
@@ -52,6 +52,32 @@ export function Dialog({ open, onClose, children, width = 420 }: { open: boolean
       )}
     </AnimatePresence>
   );
+}
+
+/** The title row every page starts with (docs/ui-spec §1): back link on sub-views, title,
+ *  then status pills / counts. It sits in the left column so the action column lines up. */
+export function PageHead({ back, title, children }: { back?: { label: string; onClick: () => void }; title: ReactNode; children?: ReactNode }) {
+  return <div className="row page-head">{back && <button className="ghost back" onClick={back.onClick} title="Esc">{back.label}</button>}<h2>{title}</h2>{children}</div>;
+}
+
+/** A collapsible block in the action column (settings, export): one line with a summary. */
+export function Section({ title, summary, open, onToggle, dirty, children }: { title: string; summary: string; open: boolean; onToggle: () => void; dirty?: boolean; children: ReactNode }) {
+  return (
+    <div className={`section${open ? " open" : ""}`}>
+      <button className="section-h" onClick={onToggle} aria-expanded={open}><b>{title}</b><span className={`small ${dirty ? "warn-text" : "muted"}`}>{summary}</span><span className="chev">{open ? "▴" : "▾"}</span></button>
+      <Pop show={open} className="section-b col">{children}</Pop>
+    </div>
+  );
+}
+
+/** Esc leaves a sub-view (review, diff, playground) unless the user is typing. */
+export function useEscBack(active: boolean, back: () => void) {
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => { const t = e.target as HTMLElement; if (e.key !== "Escape" || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT"))) return; if (document.querySelector(".overlay")) return; back(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, back]);
 }
 
 export function Pill({ kind, children, title, onClick }: { kind?: "ok" | "bad" | "warn" | "grey"; children: ReactNode; title?: string; onClick?: () => void }) {
