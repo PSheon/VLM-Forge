@@ -149,7 +149,7 @@ export default function Queue({ models, status }: { models: Model[]; status: Sta
         )}
       </section>
 
-      <aside className="card col">
+      <aside className="card col" style={{ display: cur || review ? undefined : "none" }}>
         {review ? (
           <>
             <div className="row">

@@ -20,7 +20,7 @@ ui = [
     "python-multipart>=0.0.9",
 ]
 capture = ["av>=14"]
-judge = ["transformers>=4.57,<6"]  # Qwen3-VL judge (GOALS §6)
+judge = ["transformers>=4.57,<6", "torchvision>=0.29,<0.30"]  # Qwen3-VL judge (GOALS §6)
 
 [dependency-groups]
 dev = [
@@ -49,6 +49,7 @@ explicit = true
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
 
 [tool.ruff]
 line-length = 100
