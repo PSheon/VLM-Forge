@@ -1,1 +1,0 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/components/Canvas.tsx","./src/components/ImagePicker.tsx","./src/components/TextDiff.tsx","./src/pages/Compare.tsx","./src/pages/Queue.tsx","./src/pages/Runs.tsx","./src/pages/Workbench.tsx"],"version":"5.9.3"}
