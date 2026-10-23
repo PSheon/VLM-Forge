@@ -179,6 +179,8 @@ export const api = {
   reviewImage: (imageId: string) => j<ImageReview>(fetch(`/api/review/image/${imageId}`)),
   submitImage: (reviewer: string, items: { id: number; action: string; label?: Pred | null }[]) =>
     j<Item[]>(post("/api/review/image", { reviewer, items })),
+  review: (id: number, action: string, reviewer: string, label?: Pred | null) =>
+    j<Item>(post(`/api/items/${id}/review`, { action, reviewer, label })),
   reopen: (id: number) => j<Item>(post(`/api/items/${id}/reopen`, {})),
   // ③ train
   train: (body: { name?: string; steps: number; lr: number; rank?: number }) => j<Run>(post("/api/train", body)),

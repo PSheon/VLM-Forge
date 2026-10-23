@@ -30,11 +30,12 @@ export interface CanvasProps {
   readOnly?: boolean;
   labels?: { main?: string; alt?: string };
   height?: string; // CSS height of the viewport
+  compact?: boolean; // toolbar without the hint text
 }
 
 const MIN_Z = 1, MAX_Z = 12;
 
-export default function Canvas({ src, skill, value, onChange, alt, readOnly, labels, height }: CanvasProps) {
+export default function Canvas({ src, skill, value, onChange, alt, readOnly, labels, height, compact }: CanvasProps) {
   const view = useRef<HTMLDivElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null);
@@ -211,7 +212,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
         <button onClick={reset} title="Ctrl+0">適應</button>
         {editable && <button className={panning ? "cur" : ""} onClick={() => setPan(!pan)} title="按住 Space 也可以拖動">移動</button>}
         {editable && sel !== null && <button onClick={removeSel}>刪除選取 <kbd>Del</kbd></button>}
-        <span className="muted">滾輪縮放 · {editable ? (skill === "detect" ? "拖曳畫框 · 拖角縮放 · 點框選取" : "點一下加點 · 拖動移動") : "拖曳移動"}</span>
+        {!compact && <span className="muted">滾輪縮放 · {editable ? (skill === "detect" ? "拖曳畫框 · 拖角縮放 · 點框選取" : "點一下加點 · 拖動移動") : "拖曳移動"}</span>}
         {labels && (
           <span className="legend" style={{ marginLeft: "auto" }}>
             {labels.main && <><i style={{ background: "var(--box)" }} />{labels.main} </>}

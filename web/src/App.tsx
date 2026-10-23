@@ -49,7 +49,7 @@ export default function App() {
           ))}
         </nav>
         <div className="right hint">
-          <label className="row" title="審核時記錄的名字"><span className="muted">我是</span><input value={reviewer} onChange={(ev) => setReviewer(ev.target.value)} style={{ width: 70, padding: "2px 6px" }} /></label>
+          <input value={reviewer} onChange={(ev) => setReviewer(ev.target.value)} title="審核時記錄的名字" style={{ width: 64, padding: "1px 6px", border: "1px dashed var(--line)", background: "transparent" }} />
           {down ? <span className="bad">連不到 server</span> : e ? (
             <>
               {!e.weights_ok ? <span className="warn">模型權重缺</span> : null}
