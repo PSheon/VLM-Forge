@@ -45,8 +45,11 @@ class Engine:
 
         if not Path(self.weights).exists():
             raise FileNotFoundError(
-                f"model weights not found: {self.weights} (copy them from the PRO 6000, GOALS §3)"
+                f"model weights not found: {self.weights}"
+                " (hf download moondream/moondream3.1-9B-A2B model.safetensors"
+                " --local-dir model-cache/moondream31/weights)"
             )
+        self._need(24, "Moondream")
         t0 = time.time()
         self.model = Moondream(self.weights, self.tokenizer, batch_size=self.batch_size)
         self.base_head = {k: v.clone() for k, v in self.model.region.head_state_dict().items()}
@@ -54,11 +57,34 @@ class Engine:
         self.loaded_at = time.time()
         print(f"engine: model loaded in {self.loaded_at - t0:.0f}s", flush=True)
 
+    @staticmethod
+    def gpu_free_gb() -> float | None:
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                return None
+            free, _ = torch.cuda.mem_get_info()
+            return free / 2**30
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _need(self, gb: float, what: str) -> None:
+        """The GB300 is shared and SyncVision has priority (GOALS §3): fail with a readable
+        message instead of a CUDA OOM when another job holds the memory."""
+        free = self.gpu_free_gb()
+        if free is not None and free < gb:
+            raise RuntimeError(
+                f"GPU 記憶體不足：{what}需要約 {gb:.0f} GB，現在只剩 {free:.0f} GB"
+                "（別的訓練正在用）。等它結束再試。"
+            )
+
     def _load_judge(self):
         from ..judge import Judge
 
         if not Path(paths.JUDGE_MODEL).exists():
             raise FileNotFoundError(f"judge model not found: {paths.JUDGE_MODEL}")
+        self._need(70, "出題模型（Qwen3-VL-32B）")
         t0 = time.time()
         self.judge = Judge(paths.JUDGE_MODEL)
         print(f"engine: judge loaded in {time.time() - t0:.0f}s", flush=True)
@@ -145,6 +171,9 @@ class Engine:
             "judge": str(paths.JUDGE_MODEL),
             "judge_ok": Path(paths.JUDGE_MODEL).exists(),
             "judge_loaded": self.judge is not None,
+            "gpu_free_gb": (
+                round(self.gpu_free_gb(), 1) if self.gpu_free_gb() is not None else None
+            ),
             "current": self.current,
             "adapters_loaded": sorted(self.adapters),
             "pending": self.pending(),

@@ -374,18 +374,26 @@ class Workspace:
             self.db.commit()
         return {"images": len(by_img), "clean": len(clean), "spot": len(spot), "auto": n_auto}
 
-    def claim_next_image(self, queue_id: int | None, reviewer: str, after_image: str | None = None):
-        """The next image with pending items (images holding a ``fix`` first; ``queue_id``
-        None = any batch); every pending item of it is claimed for the reviewer. Returns
-        (image, items) or None."""
+    def claim_next_image(
+        self,
+        queue_id: int | None,
+        reviewer: str,
+        after_image: str | None = None,
+        dataset_id: int | None = None,
+    ):
+        """The next image with pending items (images holding a ``fix`` first; ``queue_id`` /
+        ``dataset_id`` None = any); every pending item of it is claimed for the reviewer.
+        Returns (image, items) or None."""
         with self.lock:
             cutoff = time.time() - CLAIM_MINUTES * 60
             rows = self.db.execute(
-                "select image_id, max(verdict = 'fix') fix, min(id) first_id,"
+                "select items.image_id, max(verdict = 'fix') fix, min(items.id) first_id,"
                 " max(claimed_by is not null and claimed_by != ? and claimed_at >= ?) taken"
-                " from items where (? is null or queue_id = ?) and status = 'pending'"
-                " group by image_id order by fix desc, first_id",
-                (reviewer, cutoff, queue_id, queue_id),
+                " from items join queues on queues.id = items.queue_id"
+                " where (? is null or items.queue_id = ?) and (? is null or queues.dataset_id = ?)"
+                " and items.status = 'pending'"
+                " group by items.image_id order by fix desc, first_id",
+                (reviewer, cutoff, queue_id, queue_id, dataset_id, dataset_id),
             ).fetchall()
             pick = None
             seen_after = after_image is None

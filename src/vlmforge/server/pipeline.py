@@ -93,6 +93,8 @@ class Pipeline:
     def __init__(self, ws: Workspace):
         self.ws = ws
         self.threads: dict[str, threading.Thread] = {}
+        self.procs: dict[str, subprocess.Popen] = {}
+        self.cancelled: set[str] = set()
 
     # ------------------------------------------------------------------ status
     @staticmethod
@@ -119,7 +121,37 @@ class Pipeline:
         st["curve"], st["last"] = curve, last
         t = self.threads.get(name)
         st["alive"] = bool(t and t.is_alive())
+        tl = paths.RUNS / name / "train.log"
+        if st.get("state") == "error" and tl.exists():
+            st["log_tail"] = tl.read_text(errors="replace").splitlines()[-20:]
         return st
+
+    def cancel(self, name: str) -> bool:
+        """Stops the running subprocess; the last saved checkpoint stays."""
+        p = self.procs.get(name)
+        if p is None or p.poll() is not None:
+            return False
+        self.cancelled.add(name)
+        p.terminate()
+        return True
+
+    def delete(self, name: str) -> None:
+        import shutil
+
+        t = self.threads.get(name)
+        if t and t.is_alive():
+            raise RuntimeError("還在跑，先取消")
+        shutil.rmtree(paths.RUNS / name, ignore_errors=True)
+        self.threads.pop(name, None)
+
+    def _call(self, name: str, args: list[str], log) -> int:
+        """Runs one subprocess, remembering it so ``cancel`` can stop it."""
+        p = subprocess.Popen(args, cwd=paths.ROOT, stdout=log, stderr=subprocess.STDOUT)
+        self.procs[name] = p
+        try:
+            return p.wait()
+        finally:
+            self.procs.pop(name, None)
 
     def list(self) -> list[dict]:
         out = []
@@ -199,9 +231,10 @@ class Pipeline:
         run_dir = paths.RUNS / name
         log = open(run_dir / "train.log", "a")
         try:
-            rc = subprocess.call(
-                self._cmd("train", str(cfg)), cwd=paths.ROOT, stdout=log, stderr=subprocess.STDOUT
-            )
+            rc = self._call(name, self._cmd("train", str(cfg)), log)
+            if name in self.cancelled:
+                st["state"], st["phase"] = "cancelled", "cancelled"
+                return
             if rc != 0:
                 raise RuntimeError(f"training exited with {rc} (see runs/{name}/train.log)")
             adapter = run_dir / f"{name}.pt"
@@ -218,18 +251,19 @@ class Pipeline:
                 self._write(name, st)
                 base_rep = paths.BASELINES / f"base-{manifest.stem}.json"
                 if not base_rep.exists():  # a dataset's val split: score base once
-                    subprocess.call(
+                    self._call(
+                        name,
                         self._cmd("eval", str(manifest), "--batch", "32", "--out", str(base_rep)),
-                        cwd=paths.ROOT,
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
+                        log,
                     )
-                rc = subprocess.call(
+                rc = self._call(
+                    name,
                     self._cmd("eval", str(manifest), "--adapter", str(adapter), "--batch", "32"),
-                    cwd=paths.ROOT,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
+                    log,
                 )
+                if name in self.cancelled:
+                    st["state"], st["phase"] = "cancelled", "cancelled"
+                    return
                 rep = run_dir / f"eval-{name}-{manifest.stem}.json"
                 if rc == 0 and rep.exists():
                     m = json.loads(rep.read_text())["metrics"]

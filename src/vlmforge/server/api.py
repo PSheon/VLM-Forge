@@ -227,6 +227,28 @@ def list_reports() -> list[dict]:
     return out
 
 
+def _is_oom(e: Exception) -> bool:
+    return "out of memory" in str(e).lower() or type(e).__name__ == "OutOfMemoryError"
+
+
+def _with_backoff(fn, paths_: list[str]):
+    """Run a batched GPU call; on CUDA OOM (the GB300 is shared, GOALS §3) halve the batch
+    down to one image before giving up."""
+    try:
+        return fn(paths_)
+    except Exception as e:  # noqa: BLE001
+        if not _is_oom(e) or len(paths_) == 1:
+            raise
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        mid = len(paths_) // 2
+        return _with_backoff(fn, paths_[:mid]) + _with_backoff(fn, paths_[mid:])
+
+
 def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     app = FastAPI(title="VLM-Forge", version=__version__)
     jobs: dict[int, dict] = {}
@@ -470,13 +492,16 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                 paths_ = [ws.image(i)["path"] for i in chunk]
                 per_image: list[list[dict]] = [[] for _ in chunk]
                 if mode in ("auto", "both"):
-                    ts = engine.teacher_generate_batch(
-                        paths_, cfg.get("focus", ""), cfg.get("topics")
+                    ts = _with_backoff(
+                        lambda ps: engine.teacher_generate_batch(
+                            ps, cfg.get("focus", ""), cfg.get("topics")
+                        ),
+                        paths_,
                     )
                     for j, t in enumerate(ts):
                         per_image[j] += items_from_teacher(t, skills)
                 if fixed and any(fixed.values()):
-                    ts = engine.teacher_fixed_batch(paths_, fixed)
+                    ts = _with_backoff(lambda ps: engine.teacher_fixed_batch(ps, fixed), paths_)
                     for j, t in enumerate(ts):
                         per_image[j] += items_from_fixed(t, fixed)
                 for image_id, its in zip(chunk, per_image, strict=True):
@@ -640,21 +665,26 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         }
 
     @app.get("/api/review/next-image")
-    def review_next_image(reviewer: str, after: str | None = None):
-        r = ws.claim_next_image(None, reviewer, after)
+    def review_next_image(reviewer: str, after: str | None = None, dataset_id: int | None = None):
+        r = ws.claim_next_image(None, reviewer, after, dataset_id)
         if r is None:
             return {}
         image, items = r
         return {"image": image, "items": items}
 
     @app.get("/api/review/images")
-    def review_images(status: str = "pending"):
-        """Images with items in ``status`` (pending | auto | reviewed), newest batch first."""
+    def review_images(status: str = "pending", dataset_id: int | None = None):
+        """Images with items in ``status`` (pending | auto | reviewed | all), newest batch
+        first; ``dataset_id`` narrows to one dataset. ``claimed_by`` names who holds it."""
         rows = ws.db.execute(
-            "select image_id, count(*) n, sum(status = 'pending') pending,"
-            " sum(verdict = 'fix' and status = 'pending') fix, max(spot) spot,"
-            " sum(status = 'auto') auto, max(queue_id) queue_id"
-            " from items group by image_id order by queue_id desc, min(id)"
+            "select items.image_id, count(*) n, sum(items.status = 'pending') pending,"
+            " sum(verdict = 'fix' and items.status = 'pending') fix, max(spot) spot,"
+            " sum(items.status = 'auto') auto, max(items.queue_id) queue_id,"
+            " max(case when claimed_at >= ? then claimed_by end) claimed_by"
+            " from items join queues on queues.id = items.queue_id"
+            " where (? is null or queues.dataset_id = ?)"
+            " group by items.image_id order by max(items.queue_id) desc, min(items.id)",
+            (time.time() - 600, dataset_id, dataset_id),
         ).fetchall()
         out = [dict(r) for r in rows]
         if status == "pending":
@@ -809,6 +839,55 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             )
         except RuntimeError as e:
             raise HTTPException(409, str(e)) from e
+
+    @app.post("/api/train/{name}/cancel")
+    def train_cancel(name: str):
+        if not pipeline.cancel(name):
+            raise HTTPException(409, "沒有在跑")
+        return {"ok": True}
+
+    @app.delete("/api/train/{name}")
+    def train_delete(name: str):
+        try:
+            pipeline.delete(name)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e)) from e
+        return {"ok": True}
+
+    @app.get("/api/datasets/{ds_id}/grid")
+    def dataset_grid(ds_id: int):
+        """Every image of the dataset with its split and review counts (the thumbnail grid)."""
+        rows = ws.db.execute(
+            "select di.image_id, di.split, count(items.id) n,"
+            " sum(items.status = 'pending') pending,"
+            " sum(items.verdict = 'fix' and items.status = 'pending') fix,"
+            " sum(items.status = 'auto') auto"
+            " from dataset_images di"
+            " left join queues on queues.dataset_id = di.dataset_id"
+            " left join items on items.queue_id = queues.id and items.image_id = di.image_id"
+            " where di.dataset_id = ? group by di.image_id, di.split order by di.added_at",
+            (ds_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.post("/api/datasets/{ds_id}/items")
+    def dataset_item(ds_id: int, body: ItemIn):
+        """A confirmed item saved by hand (the playground's 存成資料集的題)."""
+        ds = store.get(ds_id)
+        qname = f"{ds['name']}-manual"
+        try:
+            q = ws.queue_by_name(qname)
+        except KeyError:
+            q = ws.create_queue(qname, "query", "base", "manual")
+            store.attach_queue(q["id"], ds_id)
+        store.add_image(ds_id, body.image_id)
+        item_id = ws.add_item(
+            body.image_id, body.skill, body.prompt, body.pred, body.pred_model, q["id"], "workbench"
+        )
+        try:
+            return ws.review(item_id, body.action, body.reviewer, body.label)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
 
     @app.get("/api/train/{name}/orin.zip")
     def train_orin(name: str):
