@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, parseFixed, phaseLabel, type Batch, type Dataset, type GridCell, type Skill, type Status } from "../api";
-import { Bar, ConfirmDialog, Dialog, PageHead, Pill, Section, eta, useToast } from "../components/ui";
+import { ActionsHead, Bar, ConfirmDialog, Dialog, PageHead, Pill, Section, eta, useToast } from "../components/ui";
 import { Fade, Item, Pop, Stagger } from "../components/motion";
 import Review from "./Review";
 import type { Step } from "../App";
@@ -30,6 +30,7 @@ export default function Datasets({ status, refresh, go, reviewer, setGuard }: { 
         </Stagger>
       </div>
       <div className="actions">
+        <ActionsHead />
         <button className="primary big" onClick={() => setShowNew(true)}>＋ 新資料集</button>
         {list.length > 0 && <div className="stat" style={{ flexWrap: "wrap" }}><span>資料集 <b>{list.length}</b></span><span>圖 <b>{tot("images")}</b></span><span>題 <b>{tot("items")}</b></span><span>已確認 <b>{tot("trainable")}</b></span><span>還要看 <b>{tot("images_pending")}</b> 張</span></div>}
         <div className="hint muted">可以陸續加圖、重複標註；每個資料集自動留 10% 當驗證集。</div>
@@ -191,6 +192,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
             <Grid cells={grid} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
           <div className="actions">
+            <ActionsHead />
             {cta && <button className="primary big" onClick={cta.run} disabled={cta.disabled}>{cta.text}</button>}
             <Pop show={total === 0} className="hint muted">拖曳、選檔、zip，或貼資料夾路徑；10% 自動留作驗證集。</Pop>
             <Pop show={total > 0 && unlabelled > 0 && !running && !interrupted(batch) && !labelBlocked} className="hint muted">{modeText}，約 20 秒/張；一致的自動通過，不一致的才要你看。</Pop>

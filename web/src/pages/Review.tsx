@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
 import Canvas from "../components/Canvas";
-import { Dialog, Pill, useToast } from "../components/ui";
+import { ActionsHead, Dialog, Pill, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
 import type { Step } from "../App";
 
@@ -163,7 +163,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
   });
   const spatialSelected = () => !!document.querySelector(".cv-stage .sel"); // arrows nudge a selected box instead
 
-  const shell = (body: ReactNode) => <div className="page"><div className="col">{header}{body}</div><div className="actions" /></div>;
+  const shell = (body: ReactNode) => <div className="page"><div className="col">{header}{body}</div><div className="actions"><ActionsHead /></div></div>;
   if (sum && sum.items === 0) return shell(<div className="empty">這個資料集還沒有題。到「圖片」分頁加照片、按「標註」。</div>);
   if (!review || !it) {
     return shell(<div className="empty">{msg === "都看完了" ? <>這個資料集都看完了（已確認 {sum?.trainable ?? 0} 題）。<button className="primary" onClick={() => go("train")} style={{ marginLeft: 8 }}>去訓練 →</button></> : msg ? <span className="row" style={{ justifyContent: "center" }}><span className="bad">{msg}</span><button onClick={() => nextImage()}>重試</button></span> : sum?.images_pending ? <span className="row" style={{ justifyContent: "center" }}><i className="spin" />載入中…</span> : "沒有待看的圖。到「圖片」分頁點任一張可以重看。"}</div>);
@@ -182,7 +182,6 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
             <span className="muted hint">{review.image.path.split("/").slice(-1)[0]}</span>
             <Pill kind={pendingLeft ? "warn" : "ok"}>這張還有 {pendingLeft} 題</Pill>
             <span className="muted hint">待看 {sum?.images_pending ?? 0} 張</span>
-            <span style={{ marginLeft: "auto" }} className="row"><button onClick={() => setGrid(!grid)} title="G">所有圖</button></span>
           </div>
           <Fade k={it.id} y={4}>
             <div className={`q ${it.verdict === "fix" ? "q-fix" : it.verdict === "accept" ? "q-acc" : ""}`}>
@@ -197,6 +196,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
           <Canvas src={api.imageUrl(review.image.id, 2048)} skill={it.skill} value={label} onChange={(p, what) => edit(p, what)} alt={spatial ? it.teacher : null} labels={spatial ? { main: "目前（可改）", alt: "預標" } : undefined} fitAspect={{ maxOffset: 270 }} focus={focus} focusKey={it.id} compact />
         </div>
         <Fade k={it.id} className="actions" y={10}>
+          <ActionsHead><button className="ghost" onClick={() => setGrid(!grid)} title="G">所有圖 <kbd>G</kbd></button></ActionsHead>
           <div className="row">
             <button className="primary big" onClick={accept}>{changed ? "存修正" : "沒問題"} <kbd>Enter</kbd></button>
             <button onClick={discard}>丟棄 <kbd>D</kbd></button>

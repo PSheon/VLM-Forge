@@ -51,8 +51,10 @@ function Shell() {
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { const t = e.target as HTMLElement; if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return; if (e.key === "?") setHelp((h) => !h); };
+    const onHelp = () => setHelp(true); // the ? 快捷鍵 button in every action column
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("forge:help", onHelp);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("forge:help", onHelp); };
   }, []);
 
   const go = (s: Step) => { if (guard && !guard()) return; setStep(s); };
@@ -87,7 +89,6 @@ function Shell() {
               {e.last_error && <Pill kind="bad" title={e.last_error} onClick={() => say(e.last_error!, "bad", { sticky: true, action: { label: "知道了", run: () => fetch("/api/status/clear-error", { method: "POST" }).then(refresh) } })}>上次錯誤</Pill>}
             </>
           ) : <span className="muted">連線中…</span>}
-          <button className="ghost" onClick={() => setHelp(true)} title="?">?</button>
         </div>
       </header>
       <main>

@@ -260,3 +260,9 @@ label.sync { background: var(--acc-soft); border-radius: 6px; padding: 5px 8px; 
 .page-head { min-height: 38px; gap: 10px; }
 .page-head h2 { display: flex; align-items: center; gap: 4px; }
 .page-head .back { padding-left: 0; }
+
+/* the row above the primary button, level with the title row (.page-head is 38px) */
+.actions-head { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.actions-head .help { color: var(--muted); font-size: 12px; padding: 4px 6px; }
+.actions-head .help:hover { color: var(--fg); }
+.page-head button { padding-block: 2px; }  /* keep the title row at 38px with the rename / back buttons */
