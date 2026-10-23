@@ -20,6 +20,10 @@ All notable changes to VLM-Forge. Versions follow [SemVer](https://semver.org/);
 - `web/e2e/smoke.mjs` (`npm run e2e`): the UI contract of docs/ui-spec §1 as a read-only Playwright check.
 - **AI 導師可信度.** The dataset page shows how far the spot check got and the share of re-checked agreed questions you left as they were (≥ 90 % with ≥ 30 seen = auto-passed questions are trustworthy). 「只看抽查」 (dataset card or the review tool row) serves only images with spot-check questions and steps only through those; `GET /api/review/next-image?spot=true`, datasets return `spot`.
 
+### Removed
+- **Code nobody calls.** 26 API routes left over from the pre-dataset workbench (`/api/infer`, `/api/judge`, `/api/models`, `/api/runs`, `/api/export`, `/api/data/*`, `POST /api/queues`, `/api/queues/auto`, `/api/queues/{id}/{triage,judge,items,next,images,next-image,image}`, `GET /api/queues`, `/api/datasets/{id}/images`, `/api/heldout/reports`, `GET /api/items/{id}`, `POST /api/items`, `/api/images/scan`, `GET /api/images/{id}`), the queue-export module, the RTSP capture module, its `capture` extra and the `forge capture` / `forge export` commands, the smoke config, dead workspace / engine / judge methods, and the unused `api.run` in the web client. `POST /api/train` now requires `dataset_ids`. Box/point geometry shared by the canvas and the review page lives in `web/src/geometry.ts`.
+- **Duplicate documentation.** GOALS.md holds only current decisions (version history is here; the review keys and layout rules are in docs/ui-spec.md, which now cites GOALS for every number instead of repeating it); stale items fixed (four dataset tabs, ①→④, the 「出題模型：8B（小）」 pill, the canvas 移動 button).
+
 ## [0.3.0] — 2026-10-23
 
 A layout pass: one visual language, more room for the image, fewer buttons.

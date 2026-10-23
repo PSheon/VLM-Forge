@@ -438,7 +438,7 @@ class RegionModel:
     def decode(self, hidden: torch.Tensor, head: "RegionHead | None" = None):
         """hidden [n, D] -> logits [n, 1024] for coord, width and height.
 
-        ``head``: a trainable :class:`RegionHead` (GOALS §5) whose cast replaces the frozen
+        ``head``: a trainable :class:`RegionHead` (GOALS §3) whose cast replaces the frozen
         decoder tensors for this call."""
         ln, w, b = (self.ln, self.dec_w, self.dec_b) if head is None else head.view(hidden.dtype)
         logits = F.linear(F.layer_norm(hidden, (D,), *ln, eps=1e-5), w, b)
@@ -496,7 +496,7 @@ class RegionModel:
 
 class RegionHead(nn.Module):
     """Trainable copy of the region decoder (layer norm + coordinate / size heads): FP32
-    masters initialised from the frozen :class:`RegionModel`. GOALS §5: the region head is
+    masters initialised from the frozen :class:`RegionModel`. GOALS §3: the region head is
     trainable, the input-side coordinate / size encoders stay frozen."""
 
     def __init__(self, region: RegionModel):
@@ -533,7 +533,7 @@ class TextLoRA(nn.Module):
     moe.{0..19}:  up_a [E, r/8, D], up_b [E, 2I, r/8], down_a [E, r/8, I], down_b [E, D, r/8]
     B matrices start at zero so the adapter begins as a no-op.
 
-    The engine has no alpha: ``scale = alpha / rank`` (GOALS §5: alpha 32 at rank 16) is
+    The engine has no alpha: ``scale = alpha / rank`` (GOALS §6: alpha 32 at rank 16) is
     applied by the trainer's forward view and folded into the B matrices by
     :meth:`engine_state_dict`, so a saved adapter loads into the engine unchanged.
     """

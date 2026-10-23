@@ -1,7 +1,7 @@
 """One GPU worker for the UI: the base model loaded once, adapters swapped per request.
 
 Requests queue FIFO on a single thread (the model is not thread-safe and the GB300 is shared,
-GOALS §9). ``model="base"`` or an adapter ``.pt`` path; adapters are cached after first load.
+GOALS §3). ``model="base"`` or an adapter ``.pt`` path; adapters are cached after first load.
 Swapping = setting ``lora`` (the decoder is rebuilt by ``Moondream`` when it changes) and
 loading / restoring the region head.
 """
@@ -115,10 +115,6 @@ class Engine:
         self.judge = Judge(d, name=label)
         self.judge_name = label
         print(f"engine: judge {label} loaded in {time.time() - t0:.0f}s", flush=True)
-
-    def teacher_generate(self, image_path: str, focus: str = "", topics=None) -> dict:
-        """Questions, answers and boxes for one image from the judge model (autogen)."""
-        return self.teacher_generate_batch([image_path], focus, topics)[0]
 
     def teacher_generate_batch(self, image_paths: list[str], focus: str = "", topics=None):
         return self.submit(lambda j: j.generate_batch(image_paths, focus, topics), "judge").result()

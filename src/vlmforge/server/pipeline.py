@@ -24,7 +24,6 @@ import yaml
 from .. import paths
 from ..data import write_rows
 from ..gate import combined_macro, gate
-from .export import export_train
 from .workspace import Workspace
 
 DEFAULT_STEPS, DEFAULT_LR, DEFAULT_RANK = 500, 2.0e-4, 16
@@ -185,20 +184,17 @@ class Pipeline:
         region_head: bool = False,
         datasets: list[str] | None = None,
     ) -> dict:
-        """``rows``: the training rows (default: everything reviewed in the workspace);
+        """``rows``: the training rows (the chosen datasets' confirmed train split);
         ``val_manifests``: extra eval suites (a dataset's own validation split) scored for
         base and adapter alike; ``region_head`` off keeps the adapter Photon-compatible."""
         if any(t.is_alive() for t in self.threads.values()):
             raise RuntimeError("a training pipeline is already running")
         if (paths.RUNS / name).exists():
             raise RuntimeError(f"run {name} exists")
-        if rows is None:
-            exp = export_train(self.ws, None, name)
-            train_path, n_rows = Path(exp["path"]), exp["rows"]
-        else:
-            train_path = paths.WORKSPACE / "export" / f"{name}.jsonl"
-            write_rows(train_path, rows, ensure_ascii=False)
-            n_rows = len(rows)
+        rows = rows or []
+        train_path = paths.WORKSPACE / "export" / f"{name}.jsonl"
+        write_rows(train_path, rows, ensure_ascii=False)
+        n_rows = len(rows)
         if n_rows == 0:
             raise RuntimeError("nothing to train on: review some data first")
         n_images = len({json.loads(line)["image"] for line in open(train_path)})

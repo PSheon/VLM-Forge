@@ -1,4 +1,4 @@
-"""The stage gate (GOALS §4): an adapter's target skill scores >= base on held-out, and no
+"""The stage gate (GOALS §6): an adapter's target skill scores >= base on held-out, and no
 other skill drops by more than ``tolerance`` (1 point) macro. Scores come from the eval
 reports ``forge eval`` writes; a skill missing from both reports (no gold yet) is skipped.
 """

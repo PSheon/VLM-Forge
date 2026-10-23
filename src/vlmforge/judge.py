@@ -1,4 +1,4 @@
-"""The judge: a larger local VLM checks every prediction before a human sees it (GOALS §6).
+"""The judge: a larger local VLM checks every prediction before a human sees it (GOALS §4).
 
 Flywheel: Moondream predicts -> the judge accepts or flags -> humans review only the flagged
 items plus a spot-check sample of the accepted ones. Default judge: Qwen3-VL-32B-Instruct
@@ -8,7 +8,7 @@ VisionTraining uses for its caption spot checks.
 Verdict per item: ``{"verdict": "accept" | "fix", "note": str, ...}``; ``fix`` means a human
 must look (wrong / missing boxes or points, a wrong answer, unsupported caption phrases).
 The judge never writes labels: an accepted prediction is exported as ``machine_reviewed``,
-a human's as ``human`` (Data Core rules §6-§7).
+a human's as ``human``.
 """
 
 from __future__ import annotations
@@ -213,9 +213,6 @@ class Judge:
             out = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False)
         n = inputs["input_ids"].shape[1]
         return [self.proc.decode(row[n:], skip_special_tokens=True) for row in out]
-
-    def generate(self, image_path: str, focus: str = "", topics: list[str] | None = None) -> dict:
-        return self.generate_batch([image_path], focus, topics)[0]
 
     def fixed_batch(self, image_paths: list[str], fixed: dict) -> list[dict]:
         """Teacher answers to a dataset's fixed prompts (``vlmforge.autogen.parse_fixed``),

@@ -1,6 +1,6 @@
-"""LoRA fine-tuning of Moondream 3.1 (GOALS §5).
+"""LoRA fine-tuning of Moondream 3.1 (GOALS §3, §6).
 
-    numactl --membind=0 .venv/bin/python -m vlmforge.train configs/detect-cctv-v1.yaml
+    numactl --membind=0 uv run forge train runs/<name>/config.yaml   # the UI writes it
 
 What is trained: TextLoRA on the language model (dense MLP layers rank r, MoE experts rank
 r/8, engine layout, scale alpha / r folded in at save) and the region decoder head
@@ -66,7 +66,7 @@ REPLAY_QUESTIONS = [
 REPLAY_CAPTIONS = ["normal"]
 REPLAY_OBJECTS = ["window", "tree", "door", "wheel", "sign", "lamp", "shoe", "hand", "building"]
 LORA_PARTS = ("up_a", "up_b", "down_a", "down_b")
-DEFAULT_GPU_MEM_GB = 60  # GOALS §9: Forge training stays under 60 GB on the shared GB300
+DEFAULT_GPU_MEM_GB = 60  # GOALS §3: Forge training stays under 60 GB on the shared GB300
 
 # An answer is a list of (token id, value): value None for a word token, x / y for COORD,
 # (w, h) for SIZE. It ends with EOS unless it was truncated.
@@ -306,7 +306,7 @@ def train(cfg_path: str) -> None:
     torch.manual_seed(seed)
     dev = torch.device("cuda")
     gpu_mem = cfg.get("gpu_mem_gb", DEFAULT_GPU_MEM_GB)
-    if gpu_mem:  # shared GPU (GOALS §9): OOM here instead of starving SyncVision
+    if gpu_mem:  # shared GPU (GOALS §3): OOM here instead of starving SyncVision
         total = torch.cuda.get_device_properties(dev).total_memory
         torch.cuda.set_per_process_memory_fraction(gpu_mem * 2**30 / total)
 

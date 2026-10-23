@@ -126,7 +126,7 @@ function Shell() {
                 {e && <>
                   <div className="it"><b>GPU</b><span>{e.busy ? `工作中：${gpuText}` : "閒置"}{e.gpu_free_gb != null ? ` · 剩 ${e.gpu_free_gb.toFixed(0)} GB` : ""}{lowGpu ? <span className="warn-text">（出題要 {e.judge_need_gb ?? 70} GB，別的訓練佔著；等它結束）</span> : ""}</span></div>
                   <div className="it"><b>模型權重</b><span className={e.weights_ok ? "" : "bad"}>{e.weights_ok ? "✓ Moondream 3.1" : `缺：hf download moondream/moondream3.1-9B-A2B model.safetensors --local-dir model-cache/moondream31/weights`}</span></div>
-                  <div className="it"><b>出題模型</b><span className={e.judge_ok ? "" : "bad"}>{!e.judge_ok ? "缺：model-cache/judge（Qwen3-VL-32B）或 model-cache/judge-8b" : e.judge_name ? `${e.judge_name}${e.judge_name === "Qwen3-VL-8B" ? "（GPU 放不下 32B，品質略低；GPU 空了重啟回 32B）" : ""}` : "還沒載入（第一次標註時載入）"}</span></div>
+                  <div className="it"><b>出題模型</b><span className={e.judge_ok ? "" : "bad"}>{!e.judge_ok ? "缺：model-cache/judge（Qwen3-VL-32B）或 model-cache/judge-8b" : e.judge_name ? `${e.judge_name}${e.judge_name === "Qwen3-VL-8B" ? "（GPU 放不下 32B；CCTV 考卷上不比 32B 差；GPU 空了重啟回 32B）" : ""}` : "還沒載入（第一次標註時載入）"}</span></div>
                   {e.last_error && <div className="it"><b>上次錯誤</b><span className="bad" style={{ overflowWrap: "anywhere" }}>{e.last_error} <button className="ghost" onClick={() => fetch("/api/status/clear-error", { method: "POST" }).then(refresh)}>知道了</button></span></div>}
                 </>}
               </div>

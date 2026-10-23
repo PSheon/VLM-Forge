@@ -115,7 +115,7 @@ def crowdhuman_rows(odgt: Path, images: dict[str, str], n: int = 500, max_count:
 
 def heldout_manifests(data: Path) -> dict[str, list[dict]]:
     """The three held-out suites from a ``syncvision-heldout-eval`` release's ``data/``,
-    row for row what SyncVision's ``make_heldout_eval.py`` writes (GOALS §4: shared KPI).
+    row for row what SyncVision's ``make_heldout_eval.py`` writes (GOALS §7: shared KPI).
     Paths are kept as given, never resolved (release files are DVC cache symlinks)."""
 
     def path(f: str) -> str:

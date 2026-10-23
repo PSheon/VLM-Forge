@@ -92,14 +92,14 @@ Held-out suites are optional: without them the test page scores only your datase
 
 ## CLI
 
-Everything the UI does is also a command:
+The UI covers the whole loop; the commands below are for scripting and for what the UI runs underneath:
 
 ```bash
+forge serve --port 8796                           # the UI
+forge manifests                                   # held-out suites from a Data Core release (optional)
 forge eval heldout-cctv [--adapter runs/x/x.pt]   # score base or an adapter → eval-*.json
-forge train configs/detect-cctv-v1.yaml           # LoRA → runs/<name>/<name>.pt
+forge train runs/<name>/config.yaml               # re-run a training the UI configured → runs/<name>/<name>.pt
 forge gate --base runs/baselines/base-heldout-cctv.json --adapter runs/x/eval-x-heldout-cctv.json --skill multi
-forge export NAME --queue 3                       # reviewed rows → workspace/export/NAME.jsonl
-forge capture --out workspace/captures/<date> --url 'rtsp://…'   # frames from an RTSP camera
 ```
 
 Adapter file: `{"lora_state_dict", "rank", "alpha", "region_head"?}` — keys `text_lora.dense.{i}.{up_a,up_b,down_a,down_b}` and `text_lora.moe.{j}.*`, alpha folded into B, rank a multiple of 8. On the Orin: `from local_adapter import Tuned; Tuned("adapter.pt").detect(img, "person")` (the bundle ships the loader; the `moondream` client only knows cloud adapter ids).

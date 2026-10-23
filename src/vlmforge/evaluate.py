@@ -1,4 +1,4 @@
-"""Scoring (SyncVision's metrics, GOALS §4) and the ``forge eval`` runner.
+"""Scoring (SyncVision's metrics, GOALS §7) and the ``forge eval`` runner.
 
 detect: F1 at IoU 0.5 (greedy matching); point: a point hits the box it lies in (rows with
 ``boxes``) or lands within radius 0.05 of a GT point; query: exact match (numbers by value,
@@ -94,7 +94,7 @@ def score(rows: list[dict], preds: list) -> dict:
         keys = [
             r["skill"],
             f"{r['skill']}:{what}",
-            f"{r['skill']}@{r.get('source', '-')}:{what}",  # macro group (GOALS §4)
+            f"{r['skill']}@{r.get('source', '-')}:{what}",  # macro group (GOALS §7)
         ]
         if r["skill"] in ("detect", "point"):
             if r["skill"] == "detect":
@@ -139,7 +139,7 @@ def score(rows: list[dict], preds: list) -> dict:
     out = {f"{k}/f1": group(k, v) for k, v in sorted(agg.items())}
     out.update({f"{k}/exact": c / max(1, n) for k, (c, n) in sorted(exact.items())})
     out.update({f"{k}/n": sum(v[:1]) + v[2] for k, v in agg.items() if ":" not in k})
-    # macro: mean over (source, object) groups, the KPI aggregate (GOALS §4)
+    # macro: mean over (source, object) groups, the KPI aggregate (GOALS §7)
     for skill in {k.split("@")[0] for k in list(agg) + list(exact) if "@" in k}:
         f = [group(k, v) for k, v in agg.items() if k.startswith(f"{skill}@")]
         e = [c / max(1, n) for k, (c, n) in exact.items() if k.startswith(f"{skill}@")]
