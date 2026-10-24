@@ -41,7 +41,7 @@
 
 - 清單＝列表列：前 4 張縮圖、名稱＋狀態 pill（標註中 n/m、還有 N 張要看、全部確認、N 張還沒標、沒有圖、上次標註失敗、標註中斷）、模式與更新時間、看過比例進度條、圖／題／已確認／驗證、›；1280 以下藏數字。
 - 新資料集 dialog：名稱必填且不重複（即時檢查）、備註。
-- 詳情頁左欄＝圖片格：拖曳區（多張、zip）、資料夾路徑（不存在／含 held-out 拒絕）、縮圖角標（val／不一致數／✓）。點縮圖或「去檢查」進檢查，「← 全部圖片」或 Esc 回來。
+- 詳情頁左欄＝圖片格：拖曳區（多張、zip、影片／GIF，下方一行「影片每 [1/2/5/10/30/60] 秒抽一張」）、資料夾路徑（圖片與影片；不存在／含 held-out 拒絕）、縮圖角標（val／不一致數／✓）。加圖 toast 寫「加入 N 張（略過 K 張：已經有或幾乎一樣）」；格子上方提示列有重複圖時多一個「有 K 張幾乎重複 → 選取」，選起來就能移除。點縮圖或「去檢查」進檢查，「← 全部圖片」或 Esc 回來。
 - 移除圖：縮圖左上角 ☐（hover 才出現）勾選；選了任一張後點縮圖＝加選／取消，Shift 連選，Esc 取消選取。動作欄主按鈕下出現「已選 N 張」卡（全選、取消選取、N 題其中幾題已確認、「重新標註 N 張…」、「從資料集移除…」，Delete＝移除）；確認 dialog 寫明會換掉／刪掉的題數。重新標註用目前的 AI 導師設定（dialog 列出模式與每張圖都問的物件），標註被擋時按鈕灰掉並寫原因。連同這些圖在此資料集的題一起刪；上傳的原檔沒有別的資料集在用才刪，GB300 資料夾的原檔不動；標註中不能移除。
 - 右欄依第 1 節順序：主按鈕（下一步）→ 批次卡 → 「AI 導師可信度」卡 → 「AI 導師設定」區塊 → 「匯出」區塊 → 底部建立時間與刪除（輸入名稱確認）。
 - 主按鈕依狀態切換：選照片加進來 → 標註新加的 N 張 → 標註中 n/m → 去檢查（還有 N 張）→ 去訓練；標註被 GPU 擋住時主鈕變「去檢查」，標註狀態退成灰字。
@@ -125,7 +125,7 @@
 | 畫面 | 端點 |
 | --- | --- |
 | 骨架 | `GET /api/status`、`POST /api/status/clear-error`、`GET /api/review/summary` |
-| ① 資料集 | `GET/POST /api/datasets`、`GET/POST/DELETE /api/datasets/{id}`、`GET …/grid`、`POST …/upload`、`POST …/folder`、`POST …/images/remove`、`POST …/relabel`、`POST …/label`、`POST …/export`、`GET …/download/{jsonl|zip}`、`POST /api/queues/{qid}/cancel`、`POST /api/queues/{qid}/resume` |
+| ① 資料集 | `GET/POST /api/datasets`、`GET/POST/DELETE /api/datasets/{id}`、`GET …/grid`、`POST …/upload`、`POST …/folder`、`POST …/images/remove`、`GET …/duplicates`、`POST …/relabel`、`POST …/label`、`POST …/export`、`GET …/download/{jsonl|zip}`、`POST /api/queues/{qid}/cancel`、`POST /api/queues/{qid}/resume` |
 | 檢查 | `GET /api/review/next-image`、`GET /api/review/images`、`GET /api/review/image/{image_id}`、`POST /api/review/image`、`POST /api/items/{id}/review`、`POST /api/items/{id}/reopen`、`POST /api/datasets/{id}/items`（加一題） |
 | ② 訓練 | `GET/POST /api/train`、`POST /api/train/{name}/cancel`、`DELETE /api/train/{name}` |
 | ③ 測試 | `GET /api/test/summary`、`GET /api/heldout/diff`、`GET/POST /api/images`、`GET /api/sources`、`POST /api/compare`、`POST /api/datasets/{id}/items`、`GET /api/train/{name}/orin.zip` |

@@ -354,3 +354,71 @@ def test_add_a_question_while_reviewing(client):
         json={**body, "image_id": img2, "action": "pending"},
     )
     assert client.get(f"/api/datasets/{ds2['id']}").json()["items"] == 1
+
+
+def test_near_duplicates_are_skipped_and_found(client):
+    """The same frame again (re-upload, or a re-encoded copy) is skipped; a frame where
+    something changed is kept; 選取幾乎重複 finds repeats already in a dataset."""
+    ds = client.post("/api/datasets", json={"name": "dup"}).json()
+
+    def scene(person: bool, noise: int = 0, fmt: str = "PNG") -> bytes:
+        im = Image.new("RGB", (320, 180), (120, 120, 120))
+        for x in range(0, 320, 40):  # some structure, like shelves
+            im.paste((60 + x // 4, 90, 140), (x, 20, x + 20, 160))
+        if person:
+            im.paste((230, 40, 40), (150, 60, 175, 150))
+        if noise:
+            im.putpixel((noise, noise), (255, 255, 255))
+        buf = io.BytesIO()
+        im.save(buf, format=fmt, quality=90)
+        return buf.getvalue()
+
+    def up(data, name):
+        return client.post(
+            f"/api/datasets/{ds['id']}/upload", files={"file": (name, data, "image/png")}
+        ).json()
+
+    assert up(scene(False), "a.png")["added"] == 1
+    assert up(scene(False), "again.png") == {"added": 0, "skipped": 1, "image_ids": []}
+    assert up(scene(False, noise=5, fmt="JPEG"), "copy.jpg")["skipped"] == 1  # re-encoded copy
+    assert up(scene(True), "person.png")["added"] == 1  # a person walked in: keep
+    # a dataset that already holds repeats (added before the check existed)
+    raw = client.ws.add_image_bytes(scene(False, noise=9), "upload", "png")
+    from vlmforge.server.datasets import DatasetStore
+
+    DatasetStore(client.ws).add_image(ds["id"], raw["id"])
+    assert client.get(f"/api/datasets/{ds['id']}/duplicates").json() == {"image_ids": [raw["id"]]}
+
+
+def test_video_and_gif_become_frames(client, tmp_path):
+    import av
+
+    ds = client.post("/api/datasets", json={"name": "vid"}).json()
+    mp4 = tmp_path / "cam.mp4"
+    with av.open(str(mp4), "w") as c:  # 6 s at 10 fps: a block moves right every second
+        s = c.add_stream("mpeg4", rate=10)
+        s.width, s.height, s.pix_fmt = 160, 96, "yuv420p"
+        for k in range(60):
+            im = Image.new("RGB", (160, 96), (90, 90, 90))
+            im.paste((240, 200, 0), (10 + (k // 10) * 22, 30, 30 + (k // 10) * 22, 60))
+            for pkt in s.encode(av.VideoFrame.from_image(im)):
+                c.mux(pkt)
+        for pkt in s.encode():
+            c.mux(pkt)
+    r = client.post(
+        f"/api/datasets/{ds['id']}/upload",
+        params={"every": 2},
+        files={"file": ("cam.mp4", mp4.read_bytes(), "video/mp4")},
+    ).json()
+    assert r["added"] == 3 and r["skipped"] == 0  # t = 0, 2, 4 s
+    frames = [Image.new("RGB", (80, 48), c) for c in ("red", "red", "blue", "green")]
+    frames[1].putpixel((3, 3), (250, 250, 250))  # GIF writers merge identical frames
+    buf = io.BytesIO()
+    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=1000)
+    g = client.post(
+        f"/api/datasets/{ds['id']}/upload",
+        params={"every": 1},
+        files={"file": ("walk.gif", buf.getvalue(), "image/gif")},
+    ).json()
+    assert g["added"] == 3 and g["skipped"] == 1  # the second red frame repeats the first
+    assert not list((client.tmp / "workspace" / "tmp").glob("*"))  # the upload is cleaned up

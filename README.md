@@ -26,7 +26,7 @@ Every page has the same shape: content on the left, an action column on the righ
 
 ### ① 資料集 — photos in, confirmed answers out
 
-Drop photos, a zip or a folder path. The grid shows how many questions on each image still disagree; the orange button is always the next thing to do; settings, export and delete live in the action column, the last pinned to its bottom. The teacher's settings live in the action column: automatic questions (objects, counts, yes/no, attributes, inspection checks, a caption), fixed prompts you write once (`detect: person, helmet` / `query: Is anyone without a helmet?`), or both. 10 % of the images become the dataset's validation split.
+Drop photos, a zip, a video (one frame every few seconds) or a folder path; a frame that repeats one already in the dataset is skipped. The grid shows how many questions on each image still disagree; the orange button is always the next thing to do; settings, export and delete live in the action column, the last pinned to its bottom. The teacher's settings live in the action column: automatic questions (objects, counts, yes/no, attributes, inspection checks, a caption), fixed prompts you write once (`detect: person, helmet` / `query: Is anyone without a helmet?`), or both. 10 % of the images become the dataset's validation split.
 
 ![Dataset page: thumbnails with disagreement counts, the next step, the last batch](docs/screenshots/dataset.jpg)
 

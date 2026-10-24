@@ -26,7 +26,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 CLAIM_MINUTES = 10
 SKILLS = ("detect", "point", "query", "caption")
@@ -53,6 +53,10 @@ create table if not exists images (
     height integer not null,
     source text not null,           -- upload | folder:<name> | heldout
     added_at text not null
+);
+create table if not exists image_sigs (  -- near-duplicate check (datasets.DUP_P99)
+    image_id text primary key,
+    sig blob not null               -- 64x36 RGB, row-major uint8
 );
 create table if not exists queues (
     id integer primary key,
@@ -94,6 +98,14 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def signature(im: Image.Image) -> bytes:
+    """A 64x36 colour thumbnail: enough to tell 'the same frame again' from 'something in it
+    changed' (datasets.DUP_P99; colour, so a lamp turning red to green counts), small enough
+    to compare thousands at once."""
+    im = ImageOps.exif_transpose(im).convert("RGB").resize((64, 36), Image.BILINEAR)
+    return im.tobytes()
+
+
 class Workspace:
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -125,6 +137,27 @@ class Workspace:
         return [{"source": r["source"], "n": r["n"]} for r in rows]
 
     # ------------------------------------------------------------------ images
+    def signatures(self, image_ids: list[str]) -> dict[str, bytes]:
+        """Each image's near-duplicate signature (``signature``), computed once and kept."""
+        out: dict[str, bytes] = {}
+        for k in range(0, len(image_ids), 500):
+            chunk = image_ids[k : k + 500]
+            marks = ",".join("?" * len(chunk))
+            q = f"select image_id, sig from image_sigs where image_id in ({marks})"
+            out.update({r[0]: r[1] for r in self.db.execute(q, chunk)})
+        missing = [i for i in image_ids if i not in out]
+        for i in missing:
+            row = self.image(i)
+            if row and Path(row["path"]).exists():
+                out[i] = signature(Image.open(row["path"]))
+                self.put_signature(i, out[i])
+        return out
+
+    def put_signature(self, image_id: str, sig: bytes) -> None:
+        with self.lock:
+            self.db.execute("insert or replace into image_sigs values (?, ?)", (image_id, sig))
+            self.db.commit()
+
     def add_image_bytes(self, data: bytes, source: str = "upload", ext: str = "jpg") -> dict:
         sha = hashlib.sha256(data).hexdigest()
         path = self.images_dir / f"{sha}.{ext}"
@@ -141,7 +174,8 @@ class Workspace:
             if row is None:
                 w, h = Image.open(path).size
                 self.db.execute(
-                    "insert into images values (?, ?, ?, ?, ?, ?)",
+                    "insert into images (id, path, width, height, source, added_at)"
+                    " values (?, ?, ?, ?, ?, ?)",
                     (sha, str(path), w, h, source, now()),
                 )
                 self.db.commit()

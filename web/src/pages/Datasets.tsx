@@ -104,6 +104,8 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [openImage, setOpenImage] = useState<string | null>(null);
   const [full, setFull] = useState<Dataset | null>(null);
   const [grid, setGrid] = useState<GridCell[] | null>(null);
+  const [dups, setDups] = useState<string[]>([]);
+  const [every, setEvery] = useState(5); // seconds between frames taken from a video
   const [dir, setDir] = useState("");
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -124,7 +126,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [newName, setNewName] = useState(d.name);
   const [exp, setExp] = useState<{ jsonl: string; rows: number; zip?: string; images?: number } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const load = useCallback(() => { api.dataset(d.id).then(setFull).catch(() => undefined); api.datasetGrid(d.id).then(setGrid).catch(() => undefined); }, [d.id]);
+  const load = useCallback(() => { api.dataset(d.id).then(setFull).catch(() => undefined); api.datasetGrid(d.id).then(setGrid).catch(() => undefined); api.duplicates(d.id).then((r) => setDups(r.image_ids)).catch(() => undefined); }, [d.id]);
   useEffect(() => { load(); }, [load, d.updated_at, d.items, d.pending]);
   const batch: Batch | undefined = full?.batches?.[0];
   const running = batch?.job?.state === "running";
@@ -143,12 +145,14 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const addFiles = async (files: FileList | File[] | null) => {
     if (!files || !files.length) return;
     setBusy(true);
-    try { let added = 0; for (const f of Array.from(files)) added += (await api.uploadToDataset(d.id, f)).added; say(`加入 ${added} 張`); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
+    const list = Array.from(files), videos = list.filter((f) => isVideo(f.name)).length;
+    if (videos) say(`影片抽幀中（每 ${every} 秒一張）…`, "ok", { ms: 4000 });
+    try { let added = 0, skipped = 0; for (const f of list) { const r = await api.uploadToDataset(d.id, f, every); added += r.added; skipped += r.skipped; } say(addedText(added, skipped)); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
   };
   const addFolder = async () => {
     if (!dir.trim()) return;
     setBusy(true);
-    try { const r = await api.addFolder(d.id, dir.trim()); say(`加入 ${r.added} 張`); setDir(""); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
+    try { const r = await api.addFolder(d.id, dir.trim(), every); say(addedText(r.added, r.skipped)); setDir(""); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
   };
   const label = async () => {
     askNotify();
@@ -237,14 +241,15 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
           <div className="col">
             {header()}
             <div className={`drop${drag ? " on" : ""}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}>
-              把照片拖到這裡，或 <button onClick={() => fileInput.current?.click()} disabled={busy}>選檔案</button>（可多張、可 zip）
-              <input ref={fileInput} type="file" accept="image/*,.zip" multiple hidden onChange={(e) => addFiles(e.target.files)} />
+              把照片、zip 或影片拖到這裡，或 <button onClick={() => fileInput.current?.click()} disabled={busy}>選檔案</button>
+              <div className="small">影片每 <select value={every} onChange={(e) => setEvery(+e.target.value)} aria-label="影片每幾秒抽一張">{[1, 2, 5, 10, 30, 60].map((s) => <option key={s} value={s}>{s}</option>)}</select> 秒抽一張；和已有的圖幾乎一樣的會略過</div>
+              <input ref={fileInput} type="file" accept="image/*,.zip,video/*,.gif" multiple hidden onChange={(e) => addFiles(e.target.files)} />
             </div>
             <div className="row">
-              <input placeholder="GB300 上的資料夾路徑，例如 /home/paul/VLM-Forge/workspace/captures/1026" value={dir} onChange={(e) => setDir(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addFolder()} style={{ flex: 1 }} />
+              <input placeholder="GB300 上的資料夾路徑（圖片與影片），例如 /home/paul/VLM-Forge/workspace/captures/1026" value={dir} onChange={(e) => setDir(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addFolder()} style={{ flex: 1 }} />
               <button onClick={addFolder} disabled={busy || !dir.trim()}>加入資料夾</button>
             </div>
-            <div className="small muted">{picked.size ? `已選 ${picked.size} 張 · 點縮圖加選或取消 · Shift 連選 · Esc 取消選取` : grid?.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查 · 左上角 ☐ 多選` : grid === null ? "載入中…" : "還沒有圖"}</div>
+            <div className="small muted row">{picked.size ? `已選 ${picked.size} 張 · 點縮圖加選或取消 · Shift 連選 · Esc 取消選取` : grid?.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查 · 左上角 ☐ 多選` : grid === null ? "載入中…" : "還沒有圖"}{!picked.size && dups.length > 0 && <button className="ghost warn-text" onClick={() => setPicked(new Set(dups))} title="和更早加入的某張幾乎一模一樣（畫面裡沒有東西移動）">有 {dups.length} 張幾乎重複 → 選取</button>}</div>
             {grid === null && (full ?? d).images > 0 && <div className="thumbs" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))" }}>{Array.from({ length: Math.min(30, (full ?? d).images) }, (_, i) => <div key={i} className="skel" style={{ aspectRatio: "4/3", borderRadius: 4 }} />)}</div>}
             <Grid cells={grid ?? []} picked={picked} onPick={togglePick} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
@@ -357,6 +362,9 @@ function BatchCard({ b, onCancel, onResume, busy, skippedNote }: { b: Batch; onC
     </div>
   );
 }
+
+const isVideo = (name: string) => /\.(mp4|mov|avi|mkv|m4v|ts|webm|gif)$/i.test(name);
+const addedText = (added: number, skipped: number) => `加入 ${added} 張${skipped ? `（略過 ${skipped} 張：已經有或幾乎一樣）` : ""}`;
 
 function Grid({ cells, picked, onPick, onOpen }: { cells: GridCell[]; picked: Set<string>; onPick: (id: string, shift: boolean) => void; onOpen: (c: GridCell) => void }) {
   if (!cells.length) return null;

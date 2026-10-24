@@ -24,10 +24,19 @@ import json
 import zipfile
 from pathlib import Path
 
+import numpy as np
+from PIL import Image
+
 from ..data import write_rows
-from .workspace import IMAGE_EXT, Workspace, item_row, now
+from .workspace import IMAGE_EXT, Workspace, item_row, now, sha256_file, signature
 
 VAL_FRACTION = 0.1
+VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".ts", ".webm", ".gif"}
+VIDEO_EVERY_S = 5.0
+# Near-duplicate: the 99th-percentile pixel difference of two 64x36 RGB signatures.
+# Calibrated on the factory CCTV frames (2026-10-24): <= 18 was the same empty scene hours
+# apart, 20 a moved box, 29 a ladder that appeared. 12 only drops frames where nothing moved.
+DUP_P99 = 12
 
 SCHEMA = """
 create table if not exists datasets (
@@ -148,42 +157,75 @@ class DatasetStore:
             self.db.commit()
         return split
 
-    def add_bytes(self, ds_id: int, data: bytes, filename: str) -> list[str]:
-        """An uploaded file: one image, or a zip of images. Returns the image ids added."""
+    # Adding images. Every path goes through ``_Adder``: an image that is (nearly) the same
+    # frame as one already in the dataset is skipped before it is stored (GOALS §4).
+    def add_bytes(self, ds_id: int, data: bytes, filename: str) -> dict:
+        """An uploaded file: one image, or a zip of images (an animated GIF is a video)."""
+        add = _Adder(self, ds_id, f"upload:{Path(filename).stem}")
         if filename.lower().endswith(".zip"):
-            ids = []
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 for info in z.infolist():
-                    if info.is_dir() or Path(info.filename).suffix.lower() not in IMAGE_EXT:
-                        continue
-                    im = self.ws.add_image_bytes(
-                        z.read(info),
-                        f"upload:{Path(filename).stem}",
-                        Path(info.filename).suffix.lstrip("."),
-                    )
-                    self.add_image(ds_id, im["id"])
-                    ids.append(im["id"])
-            return ids
+                    ext = Path(info.filename).suffix.lower()
+                    if not info.is_dir() and ext in IMAGE_EXT:
+                        add.image_bytes(z.read(info), ext.lstrip("."))
+            return add.result()
         ext = Path(filename).suffix.lower().lstrip(".") or "jpg"
-        im = self.ws.add_image_bytes(data, "upload", ext)
-        self.add_image(ds_id, im["id"])
-        return [im["id"]]
+        add.source = "upload"
+        add.image_bytes(data, ext)
+        return add.result()
+
+    def add_video(self, ds_id: int, path: Path, every_s: float, name: str | None = None) -> dict:
+        """One frame every ``every_s`` seconds of a video (or an animated GIF), stored in the
+        workspace like an upload."""
+        add = _Adder(self, ds_id, f"video:{name or Path(path).stem}")
+        for im in video_frames(Path(path), every_s):
+            buf = io.BytesIO()
+            im.convert("RGB").save(buf, format="JPEG", quality=92)
+            add.image_bytes(buf.getvalue(), "jpg", im)
+        return add.result()
 
     def add_folder(
-        self, ds_id: int, folder: Path, limit: int | None = None, seed: int = 0
-    ) -> list[str]:
-        """Every image under a folder on this machine (referenced, not copied)."""
+        self,
+        ds_id: int,
+        folder: Path,
+        limit: int | None = None,
+        seed: int = 0,
+        every_s: float = VIDEO_EVERY_S,
+    ) -> dict:
+        """Every image under a folder on this machine (referenced, not copied) and frames
+        from every video in it (stored in the workspace)."""
         import random
 
         files = sorted(p for p in Path(folder).rglob("*") if p.suffix.lower() in IMAGE_EXT)
+        videos = sorted(p for p in Path(folder).rglob("*") if p.suffix.lower() in VIDEO_EXT)
         if limit and len(files) > limit:
             files = random.Random(seed).sample(files, limit)
-        ids = []
+        add = _Adder(self, ds_id, f"folder:{Path(folder).name}")
         for p in files:
-            im = self.ws.add_image_path(p, f"folder:{Path(folder).name}")
-            self.add_image(ds_id, im["id"])
-            ids.append(im["id"])
-        return ids
+            add.image_path(p)
+        out = add.result()
+        for v in videos:
+            r = self.add_video(ds_id, v, every_s)
+            out["image_ids"] += r["image_ids"]
+            out["skipped"] += r["skipped"]
+        out["added"] = len(out["image_ids"])
+        return out
+
+    def duplicates(self, ds_id: int) -> list[str]:
+        """Images that repeat an earlier image of the dataset (same frame again): the later
+        copy of each, ready to be picked and removed."""
+        ids = self.image_ids(ds_id)  # in the order they were added
+        sigs = self.ws.signatures(ids)
+        seen = _SigIndex([])
+        dup = []
+        for i in ids:
+            if i not in sigs:
+                continue
+            if seen.repeats(sigs[i]):
+                dup.append(i)
+            else:
+                seen.add(sigs[i])
+        return dup
 
     def image_ids(self, ds_id: int, split: str | None = None) -> list[str]:
         q = "select image_id from dataset_images where dataset_id = ?"
@@ -191,7 +233,7 @@ class DatasetStore:
         if split:
             q += " and split = ?"
             args.append(split)
-        return [r["image_id"] for r in self.db.execute(q + " order by added_at, image_id", args)]
+        return [r["image_id"] for r in self.db.execute(q + " order by added_at, rowid", args)]
 
     def remove_images(self, ds_id: int, image_ids: list[str]) -> dict:
         """Takes images out of the dataset together with their questions in it (reviewed or
@@ -419,3 +461,98 @@ class DatasetStore:
             res["zip"] = str(zpath)
             res["images"] = len(seen)
         return res
+
+
+class _SigIndex:
+    """Signatures seen so far; ``repeats(sig)`` = some earlier image is the same frame."""
+
+    def __init__(self, sigs: list[bytes]):
+        flat = np.frombuffer(b"".join(sigs), np.uint8)
+        self.m = flat.reshape(len(sigs), 64 * 36 * 3).astype(np.int16)
+
+    def repeats(self, sig: bytes) -> bool:
+        if not len(self.m):
+            return False
+        d = np.abs(self.m - np.frombuffer(sig, np.uint8).astype(np.int16))
+        near = d.mean(axis=1) <= DUP_P99  # p99 >= mean, so only these can be duplicates
+        return bool(near.any() and (np.percentile(d[near], 99, axis=1) <= DUP_P99).any())
+
+    def add(self, sig: bytes) -> None:
+        self.m = np.concatenate([self.m, np.frombuffer(sig, np.uint8).astype(np.int16)[None]])
+
+
+class _Adder:
+    """Adds images to one dataset, skipping ones it already has (same file, or nearly the
+    same frame) before anything is written."""
+
+    def __init__(self, store: DatasetStore, ds_id: int, source: str):
+        store.get(ds_id)  # KeyError for a dataset that does not exist
+        self.store, self.ds_id, self.source = store, ds_id, source
+        have = store.image_ids(ds_id)
+        self.have = set(have)
+        self.index = _SigIndex(list(store.ws.signatures(have).values()))
+        self.ids: list[str] = []
+        self.skipped = 0
+
+    def _fresh(self, image_id: str, im: Image.Image) -> bytes | None:
+        if image_id in self.have:
+            self.skipped += 1
+            return None
+        sig = signature(im)
+        if self.index.repeats(sig):
+            self.skipped += 1
+            return None
+        return sig
+
+    def image_bytes(self, data: bytes, ext: str, im: Image.Image | None = None) -> None:
+        sig = self._fresh(hashlib.sha256(data).hexdigest(), im or Image.open(io.BytesIO(data)))
+        if sig is not None:
+            self._keep(self.store.ws.add_image_bytes(data, self.source, ext)["id"], sig)
+
+    def image_path(self, path: Path) -> None:
+        image_id = sha256_file(path)
+        sig = self._fresh(image_id, Image.open(path))
+        if sig is not None:
+            self._keep(self.store.ws.add_image_path(path, self.source, image_id)["id"], sig)
+
+    def _keep(self, image_id: str, sig: bytes) -> None:
+        self.store.ws.put_signature(image_id, sig)
+        self.store.add_image(self.ds_id, image_id)
+        self.index.add(sig)
+        self.have.add(image_id)
+        self.ids.append(image_id)
+
+    def result(self) -> dict:
+        return {"added": len(self.ids), "skipped": self.skipped, "image_ids": self.ids}
+
+
+def video_frames(path: Path, every_s: float):
+    """One PIL frame every ``every_s`` seconds. GIFs go through PIL (their frame durations);
+    videos through PyAV, seeking to each target time instead of decoding everything."""
+    every_s = max(0.2, float(every_s))
+    if path.suffix.lower() == ".gif":
+        im, t, nxt = Image.open(path), 0.0, 0.0
+        for k in range(getattr(im, "n_frames", 1)):
+            im.seek(k)
+            if t + 1e-6 >= nxt:
+                yield im.convert("RGB")
+                nxt = t + every_s
+            t += (im.info.get("duration") or 100) / 1000
+        return
+    import av
+
+    with av.open(str(path)) as c:
+        s = c.streams.video[0]
+        s.thread_type = "AUTO"
+        dur = float(c.duration / 1e6) if c.duration else float((s.duration or 0) * s.time_base)
+        t = 0.0
+        while t <= dur + 1e-6:
+            c.seek(int(t / s.time_base) + (s.start_time or 0), stream=s, backward=True)
+            for frame in c.decode(s):
+                ft = frame.time if frame.time is not None else 0.0
+                if ft + 1e-3 >= t + (float(s.start_time or 0) * s.time_base):
+                    yield frame.to_image()
+                    break
+            else:
+                break
+            t += every_s

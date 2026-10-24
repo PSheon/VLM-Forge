@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -24,7 +25,7 @@ from pydantic import BaseModel
 from .. import __version__, paths
 from ..autogen import DEFAULT_PROBES
 from ..orin import make_bundle
-from .datasets import DatasetStore
+from .datasets import VIDEO_EVERY_S, VIDEO_EXT, DatasetStore
 from .pipeline import DEFAULT_LR, DEFAULT_STEPS, Pipeline, default_name
 from .workspace import ALL, SKILLS, Workspace
 
@@ -81,6 +82,7 @@ class RemoveImagesIn(BaseModel):
 class FolderIn(BaseModel):
     dir: str
     limit: int | None = None
+    every: float = 5.0  # seconds between frames taken from videos in the folder
 
 
 class ReviewIn(BaseModel):
@@ -450,13 +452,29 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/datasets/{ds_id}/upload")
-    async def dataset_upload(ds_id: int, file: UploadFile):
-        data = await file.read()
+    def dataset_upload(ds_id: int, file: UploadFile, every: float = VIDEO_EVERY_S):
+        """An image, a zip of images, or a video / animated GIF (one frame every ``every``
+        seconds). Images that repeat one already in the dataset are skipped (``skipped``)."""
+        name = file.filename or "upload.jpg"
         try:
-            ids = store.add_bytes(ds_id, data, file.filename or "upload.jpg")
+            if Path(name).suffix.lower() in VIDEO_EXT:
+                tmp = (
+                    paths.WORKSPACE
+                    / "tmp"
+                    / f"{os.getpid()}-{threading.get_ident()}-{Path(name).name}"
+                )
+                tmp.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with tmp.open("wb") as f:  # stream to disk: videos can be gigabytes
+                        shutil.copyfileobj(file.file, f, 1 << 20)
+                    return store.add_video(ds_id, tmp, every, Path(name).stem)
+                finally:
+                    tmp.unlink(missing_ok=True)
+            return store.add_bytes(ds_id, file.file.read(), name)
         except KeyError as e:
             raise HTTPException(404, "沒有這個資料集") from e
-        return {"added": len(ids), "image_ids": ids}
+        except Exception as e:  # noqa: BLE001 - an unreadable file: say which
+            raise HTTPException(422, f"讀不了 {name}：{e}") from e
 
     @app.post("/api/datasets/{ds_id}/folder")
     def dataset_folder(ds_id: int, body: FolderIn):
@@ -466,10 +484,17 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         if "heldout" in str(d):
             raise HTTPException(422, "held-out 的圖不能進資料集（GOALS §4）")
         try:
-            ids = store.add_folder(ds_id, d, body.limit)
+            return store.add_folder(ds_id, d, body.limit, every_s=body.every)
         except KeyError as e:
             raise HTTPException(404, "沒有這個資料集") from e
-        return {"added": len(ids), "image_ids": ids}
+
+    @app.get("/api/datasets/{ds_id}/duplicates")
+    def dataset_duplicates(ds_id: int):
+        """Images that repeat an earlier one in the dataset (the grid's 「選取幾乎重複」)."""
+        try:
+            return {"image_ids": store.duplicates(ds_id)}
+        except KeyError as e:
+            raise HTTPException(404, "沒有這個資料集") from e
 
     @app.post("/api/datasets/{ds_id}/images/remove")
     def dataset_remove_images(ds_id: int, body: RemoveImagesIn):
