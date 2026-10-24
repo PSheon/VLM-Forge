@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import sqlite3
 import threading
@@ -26,12 +27,13 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 CLAIM_MINUTES = 10
 SKILLS = ("detect", "point", "query", "caption")
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 STATUSES = ("pending", "auto", "approved", "corrected", "discarded")
+BACKUP_KEEP = 7  # daily database copies kept in workspace/backups
 SPOT_FRAC, SPOT_MIN = 0.1, 20  # judge-accepted items a human still sees (per queue)
 ALL = 10**9  # ``items(limit=ALL)``: every row, for pipelines
 # columns added after the first schema; (table, column, type) applied with ALTER TABLE
@@ -53,6 +55,10 @@ create table if not exists images (
     height integer not null,
     source text not null,           -- upload | folder:<name> | heldout
     added_at text not null
+);
+create table if not exists image_sigs (  -- near-duplicate check (datasets.DUP_P99)
+    image_id text primary key,
+    sig blob not null               -- 64x36 RGB, row-major uint8
 );
 create table if not exists queues (
     id integer primary key,
@@ -94,6 +100,14 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def signature(im: Image.Image) -> bytes:
+    """A 64x36 colour thumbnail: enough to tell 'the same frame again' from 'something in it
+    changed' (datasets.DUP_P99; colour, so a lamp turning red to green counts), small enough
+    to compare thousands at once."""
+    im = ImageOps.exif_transpose(im).convert("RGB").resize((64, 36), Image.BILINEAR)
+    return im.tobytes()
+
+
 class Workspace:
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -108,6 +122,7 @@ class Workspace:
                 self.db.execute(f"alter table {table} add column {col} {typ}")
         self.db.commit()
         self.lock = threading.Lock()
+        self.daily: list = []  # chores run with the backup check (e.g. DatasetStore.purge)
 
     @property
     def db(self) -> sqlite3.Connection:
@@ -118,6 +133,53 @@ class Workspace:
             self._local.conn = c
         return c
 
+    # ------------------------------------------------------------------ backups
+    def backup(self, keep: int = BACKUP_KEEP) -> Path:
+        """Today's copy of the database (every question, answer and review) in
+        ``backups/forge-YYYYMMDD.sqlite``, made once a day with SQLite's online backup; the
+        newest ``keep`` stay. Image files are not copied (uploads live in ``images/``)."""
+        d = self.root / "backups"
+        d.mkdir(exist_ok=True)
+        dest = d / f"forge-{time.strftime('%Y%m%d')}.sqlite"
+        if not dest.exists():
+            tmp = dest.with_suffix(".tmp")
+            src, dst = sqlite3.connect(self._path), sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+                src.close()
+            os.replace(tmp, dest)
+        for old in sorted(d.glob("forge-*.sqlite"))[:-keep]:
+            old.unlink()
+        return dest
+
+    def latest_backup(self) -> dict | None:
+        files = sorted((self.root / "backups").glob("forge-*.sqlite"))
+        if not files:
+            return None
+        st = files[-1].stat()
+        return {
+            "file": str(files[-1]),
+            "at": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="minutes"),
+            "count": len(files),
+        }
+
+    def start_backups(self, every_s: int = 3600) -> None:
+        """Back up now and check hourly (one copy per day) on a daemon thread; ``daily``
+        chores run with each check."""
+
+        def loop():
+            while True:
+                for job in (self.backup, *self.daily):
+                    try:
+                        job()
+                    except Exception as e:  # noqa: BLE001 - a failed chore must not stop the server
+                        print(f"{getattr(job, '__name__', job)} failed: {e}", flush=True)
+                time.sleep(every_s)
+
+        threading.Thread(target=loop, daemon=True, name="backups").start()
+
     def sources(self) -> list[dict]:
         rows = self.db.execute(
             "select source, count(*) n from images group by source order by source"
@@ -125,6 +187,27 @@ class Workspace:
         return [{"source": r["source"], "n": r["n"]} for r in rows]
 
     # ------------------------------------------------------------------ images
+    def signatures(self, image_ids: list[str]) -> dict[str, bytes]:
+        """Each image's near-duplicate signature (``signature``), computed once and kept."""
+        out: dict[str, bytes] = {}
+        for k in range(0, len(image_ids), 500):
+            chunk = image_ids[k : k + 500]
+            marks = ",".join("?" * len(chunk))
+            q = f"select image_id, sig from image_sigs where image_id in ({marks})"
+            out.update({r[0]: r[1] for r in self.db.execute(q, chunk)})
+        missing = [i for i in image_ids if i not in out]
+        for i in missing:
+            row = self.image(i)
+            if row and Path(row["path"]).exists():
+                out[i] = signature(Image.open(row["path"]))
+                self.put_signature(i, out[i])
+        return out
+
+    def put_signature(self, image_id: str, sig: bytes) -> None:
+        with self.lock:
+            self.db.execute("insert or replace into image_sigs values (?, ?)", (image_id, sig))
+            self.db.commit()
+
     def add_image_bytes(self, data: bytes, source: str = "upload", ext: str = "jpg") -> dict:
         sha = hashlib.sha256(data).hexdigest()
         path = self.images_dir / f"{sha}.{ext}"
@@ -141,7 +224,8 @@ class Workspace:
             if row is None:
                 w, h = Image.open(path).size
                 self.db.execute(
-                    "insert into images values (?, ?, ?, ?, ?, ?)",
+                    "insert into images (id, path, width, height, source, added_at)"
+                    " values (?, ?, ?, ?, ?, ?)",
                     (sha, str(path), w, h, source, now()),
                 )
                 self.db.commit()

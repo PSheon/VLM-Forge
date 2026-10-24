@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -24,7 +25,7 @@ from pydantic import BaseModel
 from .. import __version__, paths
 from ..autogen import DEFAULT_PROBES
 from ..orin import make_bundle
-from .datasets import DatasetStore
+from .datasets import VIDEO_EVERY_S, VIDEO_EXT, DatasetStore
 from .pipeline import DEFAULT_LR, DEFAULT_STEPS, Pipeline, default_name
 from .workspace import ALL, SKILLS, Workspace
 
@@ -81,6 +82,7 @@ class RemoveImagesIn(BaseModel):
 class FolderIn(BaseModel):
     dir: str
     limit: int | None = None
+    every: float = 5.0  # seconds between frames taken from videos in the folder
 
 
 class ReviewIn(BaseModel):
@@ -136,6 +138,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             "engine": engine.status(),
             "jobs": jobs,
             "models": list_models(),
+            "backup": ws.latest_backup(),
         }
 
     @app.post("/api/status/clear-error")
@@ -286,7 +289,10 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                     for j, t in enumerate(ts):
                         per_image[j] += items_from_fixed(t, fixed)
                 for image_id, its in zip(chunk, per_image, strict=True):
-                    seen: set[tuple[str, str]] = set()
+                    # a relabelled image keeps its human answers: do not ask those again
+                    seen = (
+                        store.asked(cfg["dataset_id"], image_id) if cfg.get("dataset_id") else set()
+                    )
                     for it in its:
                         key = (it["skill"], it["prompt"])
                         if key in seen:
@@ -411,6 +417,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
 
     # ------------------------------------------------------------------ datasets (GOALS §4)
     store = DatasetStore(ws)
+    ws.daily.append(store.purge)  # removed images' files go after datasets.TRASH_DAYS
 
     @app.get("/api/datasets")
     def datasets():
@@ -429,7 +436,11 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             d = store.get(ds_id)
         except KeyError as e:
             raise HTTPException(404) from e
-        d["batches"] = [_batch(q) for q in ws.queues() if q.get("dataset_id") == ds_id]
+        d["batches"] = [  # labelling batches only (hand-added questions have their own queue)
+            _batch(q)
+            for q in ws.queues()
+            if q.get("dataset_id") == ds_id and q.get("mode") == "auto"
+        ]
         d["unlabelled"] = len(store.unlabelled_image_ids(ds_id))
         return d
 
@@ -443,13 +454,29 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/datasets/{ds_id}/upload")
-    async def dataset_upload(ds_id: int, file: UploadFile):
-        data = await file.read()
+    def dataset_upload(ds_id: int, file: UploadFile, every: float = VIDEO_EVERY_S):
+        """An image, a zip of images, or a video / animated GIF (one frame every ``every``
+        seconds). Images that repeat one already in the dataset are skipped (``skipped``)."""
+        name = file.filename or "upload.jpg"
         try:
-            ids = store.add_bytes(ds_id, data, file.filename or "upload.jpg")
+            if Path(name).suffix.lower() in VIDEO_EXT:
+                tmp = (
+                    paths.WORKSPACE
+                    / "tmp"
+                    / f"{os.getpid()}-{threading.get_ident()}-{Path(name).name}"
+                )
+                tmp.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with tmp.open("wb") as f:  # stream to disk: videos can be gigabytes
+                        shutil.copyfileobj(file.file, f, 1 << 20)
+                    return store.add_video(ds_id, tmp, every, Path(name).stem)
+                finally:
+                    tmp.unlink(missing_ok=True)
+            return store.add_bytes(ds_id, file.file.read(), name)
         except KeyError as e:
             raise HTTPException(404, "沒有這個資料集") from e
-        return {"added": len(ids), "image_ids": ids}
+        except Exception as e:  # noqa: BLE001 - an unreadable file: say which
+            raise HTTPException(422, f"讀不了 {name}：{e}") from e
 
     @app.post("/api/datasets/{ds_id}/folder")
     def dataset_folder(ds_id: int, body: FolderIn):
@@ -459,38 +486,78 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
         if "heldout" in str(d):
             raise HTTPException(422, "held-out 的圖不能進資料集（GOALS §4）")
         try:
-            ids = store.add_folder(ds_id, d, body.limit)
+            return store.add_folder(ds_id, d, body.limit, every_s=body.every)
         except KeyError as e:
             raise HTTPException(404, "沒有這個資料集") from e
-        return {"added": len(ids), "image_ids": ids}
+
+    @app.post("/api/datasets/{ds_id}/images/restore")
+    def dataset_restore_images(ds_id: int, trash_id: int):
+        """Undo a removal (the toast's 復原), within datasets.TRASH_DAYS."""
+        try:
+            return store.restore(ds_id, trash_id)
+        except KeyError as e:
+            raise HTTPException(404, "已經不能復原（超過 7 天或已復原）") from e
+
+    @app.get("/api/datasets/{ds_id}/duplicates")
+    def dataset_duplicates(ds_id: int):
+        """Images that repeat an earlier one in the dataset (the grid's 「選取幾乎重複」)."""
+        try:
+            return {"image_ids": store.duplicates(ds_id)}
+        except KeyError as e:
+            raise HTTPException(404, "沒有這個資料集") from e
 
     @app.post("/api/datasets/{ds_id}/images/remove")
     def dataset_remove_images(ds_id: int, body: RemoveImagesIn):
         """Take images out of the dataset with their questions; refused while it is labelling
         (the running batch would write questions for them again)."""
-        if any(
-            jobs.get(q["id"], {}).get("state") == "running"
-            for q in ws.queues()
-            if q.get("dataset_id") == ds_id
-        ):
+        if _labelling(ds_id):
             raise HTTPException(409, "標註中，跑完或取消後才能移除圖")
         try:
             return store.remove_images(ds_id, body.image_ids)
         except KeyError as e:
             raise HTTPException(404, "沒有這個資料集") from e
 
+    def _labelling(ds_id: int) -> bool:
+        return any(
+            jobs.get(q["id"], {}).get("state") == "running"
+            for q in ws.queues()
+            if q.get("dataset_id") == ds_id
+        )
+
     @app.post("/api/datasets/{ds_id}/label")
     def dataset_label(ds_id: int, n_images: int | None = None, model: str = "base"):
         """Run the teacher -> student -> compare chain on the dataset's unlabelled images,
         following its config (auto questions and/or fixed prompts)."""
-        ds = store.get(ds_id)
         ids = store.unlabelled_image_ids(ds_id)
         if n_images:
             ids = ids[:n_images]
         if not ids:
             raise HTTPException(409, "沒有還沒標的圖")
+        return _label(ds_id, ids, model)
+
+    @app.post("/api/datasets/{ds_id}/relabel")
+    def dataset_relabel(ds_id: int, body: RemoveImagesIn, model: str = "base"):
+        """Ask these images again with the current teacher settings (e.g. after adding 每張圖都
+        問的物件): machine questions are replaced, human ones kept."""
+        if _labelling(ds_id):
+            raise HTTPException(409, "標註中，跑完或取消後再重新標註")
+        if not body.image_ids:
+            raise HTTPException(422, "沒有選圖")
+        try:
+            reset = store.reset_for_relabel(ds_id, body.image_ids)
+        except KeyError as e:
+            raise HTTPException(404, "沒有這個資料集") from e
+        return {**_label(ds_id, body.image_ids, model), "reset": reset}
+
+    def _label(ds_id: int, ids: list[str], model: str) -> dict:
+        ds = store.get(ds_id)
         cfg = ds["config"]
-        qname = f"{ds['name']}-{time.strftime('%m%d-%H%M%S')}"
+        qname = base = f"{ds['name']}-{time.strftime('%m%d-%H%M%S')}"
+        taken = {q["name"] for q in ws.queues()}
+        for k in range(2, 100):  # two batches started in the same second
+            if qname not in taken:
+                break
+            qname = f"{base}-{k}"
         q = ws.create_queue(qname, "query", model, "autogen", Path(paths.JUDGE_MODEL).name)
         store.attach_queue(q["id"], ds_id)
         job_cfg = {
@@ -503,6 +570,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             "probes": cfg["probes"] if "probes" in cfg else DEFAULT_PROBES,
             "model": model,
             "seed": 0,
+            "dataset_id": ds_id,
         }
         ws.set_queue_mode(q["id"], "auto", job_cfg)
         _start(q["id"], _autogen_queue, job_cfg)
@@ -570,7 +638,10 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             "select di.image_id, di.split, count(items.id) n,"
             " sum(items.status = 'pending') pending,"
             " sum(items.verdict = 'fix' and items.status = 'pending') fix,"
-            " sum(items.status = 'auto') auto"
+            " sum(items.status = 'auto') auto,"
+            " sum(items.spot = 1 and items.status = 'pending') spot,"
+            " sum(items.status in ('approved', 'corrected', 'discarded')"
+            " or items.origin = 'workbench') kept"  # what 重新標註 leaves alone
             " from dataset_images di"
             " left join queues on queues.dataset_id = di.dataset_id"
             " left join items on items.queue_id = queues.id and items.image_id = di.image_id"
@@ -582,18 +653,42 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
 
     @app.post("/api/datasets/{ds_id}/items")
     def dataset_item(ds_id: int, body: ItemIn):
-        """A confirmed item saved by hand (the playground's 存成資料集的題)."""
+        """An item added by hand: confirmed (the playground's 存成資料集的題) or, with
+        ``action="pending"``, a new question for the review page to answer (＋加一題)."""
         ds = store.get(ds_id)
-        qname = f"{ds['name']}-manual"
-        try:
-            q = ws.queue_by_name(qname)
-        except KeyError:
+        # one hand-made queue per dataset, found by id (a deleted dataset's queue keeps its
+        # name, so a new dataset with the same name must not reuse it)
+        q = next(
+            (
+                x
+                for x in ws.queues()
+                if x.get("dataset_id") == ds_id
+                and x.get("mode") != "auto"
+                and x["note"] == "manual"
+            ),
+            None,
+        )
+        if q is None:
+            taken = {x["name"] for x in ws.queues()}
+            qname = f"{ds['name']}-manual"
+            if qname in taken:
+                qname = f"{ds['name']}-manual-{ds_id}"
             q = ws.create_queue(qname, "query", "base", "manual")
             store.attach_queue(q["id"], ds_id)
         store.add_image(ds_id, body.image_id)
+        if body.skill not in SKILLS or not body.prompt.strip():
+            raise HTTPException(422, "要有 skill 和題目")
         item_id = ws.add_item(
-            body.image_id, body.skill, body.prompt, body.pred, body.pred_model, q["id"], "workbench"
+            body.image_id,
+            body.skill,
+            body.prompt.strip(),
+            body.pred,
+            body.pred_model,
+            q["id"],
+            "workbench",
         )
+        if body.action == "pending":
+            return ws.item(item_id)
         try:
             return ws.review(item_id, body.action, body.reviewer, body.label)
         except ValueError as e:
@@ -631,6 +726,50 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                 m = json.loads(p.read_text())["metrics"]
                 base[s] = {k.split("/")[0]: v for k, v in m.items() if k.endswith("/macro")}
         return {"suites": list(paths.HELDOUT_SUITES), "base": base, "runs": pipeline.list()}
+
+    @app.get("/api/test/objects")
+    def test_objects(suite: str):
+        """One suite broken down by object / question: base vs every finished run, with how
+        many questions each row has (a score over 3 questions is noise)."""
+        base_p = paths.BASELINES / f"base-{suite}.json"
+        if not base_p.exists():
+            raise HTTPException(404, "這張考卷還沒有 base 分數")
+        base = json.loads(base_p.read_text())
+
+        def per_object(metrics: dict) -> dict[str, float]:
+            out = {}
+            for k, v in metrics.items():
+                key, _, _metric = k.rpartition("/")
+                skill, _, what = key.partition(":")
+                if what and "@" not in skill:  # skill:object, not the per-source copies
+                    out[f"{skill}:{what}"] = v
+            return out
+
+        n: dict[str, int] = {}
+        manifest = Path(base.get("manifest", ""))
+        if manifest.exists():
+            for line in open(manifest):
+                r = json.loads(line)
+                k = f"{r['skill']}:{r.get('object') or r.get('question') or r.get('length', '')}"
+                n[k] = n.get(k, 0) + 1
+        runs = {}
+        for r in pipeline.list():
+            rep = paths.RUNS / r["name"] / f"eval-{r['name']}-{suite}.json"
+            if r.get("state") == "done" and rep.exists():
+                runs[r["name"]] = per_object(json.loads(rep.read_text())["metrics"])
+        rows = [
+            {
+                "skill": k.split(":", 1)[0],
+                "object": k.split(":", 1)[1],
+                "n": n.get(k, 0),
+                "base": v,
+                "runs": {name: m.get(k) for name, m in runs.items()},
+            }
+            for k, v in per_object(base["metrics"]).items()
+        ]
+        order = {s: i for i, s in enumerate(SKILLS)}
+        rows.sort(key=lambda x: (order.get(x["skill"], 9), -x["n"], x["object"]))
+        return {"suite": suite, "rows": rows}
 
     @app.get("/api/queues/{qid}")
     def queue(qid: int):

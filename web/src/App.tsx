@@ -18,7 +18,7 @@ const STEPS = [
 export type Step = (typeof STEPS)[number][0];
 
 const HELP: Record<Step, [string, string][]> = {
-  datasets: [["拖曳照片到虛線區", "加入資料集"], ["點縮圖", "進檢查看那張"], ["縮圖左上角 ☐ · Shift+點", "多選圖片 · 連選"], ["Delete（選了圖）", "從資料集移除"], ["Esc（選了圖）", "取消選取"], ["Enter", "檢查：存這題，到下一題"], ["Shift+Enter", "這張剩下的全照畫面存"], ["D", "丟棄這題"], ["Y / N", "是非題：yes / no（直接存）"], ["0–9 · ↑↓", "數量題：填數字 / 加減"], ["1 / 2", "用預標 / 用模型的答案"], ["3", "框／點題：補上預標有、目前沒有的"], ["P", "detect 題：存的時候同時存同物件的 point（框中心）開／關"], ["Backspace", "刪最後一個框／點"], ["E", "改答案（文字題）"], ["Z", "還原這題（還沒存的改動）"], ["Ctrl+Z", "重開上一題（已經存了也可以）"], ["← / →", "上一題 / 下一題"], ["S", "跳過這張"], ["G", "所有圖"], ["F", "回到全圖"], ["H（按住）", "看原圖"], ["拖曳 / 拖角 / 點框", "detect：畫框、縮放、選取（預標框被蓋到會變綠 ✓）"], ["點一下 / 拖點", "point：加點、移動；點在預標框裡會吸到框中心，按住 Alt 放在原位（紅點＝不在任何預標框裡）"], ["Tab", "選下一個框/點"], ["方向鍵（選取時）", "微移 1px，Shift 10px"], ["Delete", "刪框/點"], ["滾輪 · Space／中鍵／右鍵拖曳", "縮放 · 移動畫面"]],
+  datasets: [["拖曳照片到虛線區", "加入資料集"], ["點縮圖", "進檢查看那張"], ["縮圖左上角 ☐ · Shift+點", "多選圖片 · 連選"], ["Delete（選了圖）", "從資料集移除"], ["A（檢查）", "這張圖加一題"], ["Esc（選了圖）", "取消選取"], ["Enter", "檢查：存這題，到下一題"], ["Shift+Enter", "這張剩下的全照畫面存"], ["D", "丟棄這題"], ["Y / N", "是非題：yes / no（直接存）"], ["0–9 · ↑↓", "數量題：填數字 / 加減"], ["1 / 2", "用預標 / 用模型的答案"], ["3", "框／點題：補上預標有、目前沒有的"], ["P", "detect 題：存的時候同時存同物件的 point（框中心）開／關"], ["Backspace", "刪最後一個框／點"], ["E", "改答案（文字題）"], ["Z", "還原這題（還沒存的改動）"], ["Ctrl+Z", "重開上一題（已經存了也可以）"], ["← / →", "上一題 / 下一題"], ["S", "跳過這張"], ["G", "所有圖"], ["F", "回到全圖"], ["H（按住）", "看原圖"], ["拖曳 / 拖角 / 點框", "detect：畫框、縮放、選取（預標框被蓋到會變綠 ✓）"], ["點一下 / 拖點", "point：加點、移動；點在預標框裡會吸到框中心，按住 Alt 放在原位（紅點＝不在任何預標框裡）"], ["Tab", "選下一個框/點"], ["方向鍵（選取時）", "微移 1px，Shift 10px"], ["Delete", "刪框/點"], ["滾輪 · Space／中鍵／右鍵拖曳", "縮放 · 移動畫面"]],
   train: [["Enter（欄位內）", "開始訓練"], ["?", "說明"]],
   test: [["← / →（看差異）", "上一題 / 下一題"], ["?", "說明"]],
 };
@@ -127,6 +127,7 @@ function Shell() {
                   <div className="it"><b>GPU</b><span>{e.busy ? `工作中：${gpuText}` : "閒置"}{e.gpu_free_gb != null ? ` · 剩 ${e.gpu_free_gb.toFixed(0)} GB` : ""}{lowGpu ? <span className="warn-text">（出題要 {e.judge_need_gb ?? 70} GB，別的訓練佔著；等它結束）</span> : ""}</span></div>
                   <div className="it"><b>模型權重</b><span className={e.weights_ok ? "" : "bad"}>{e.weights_ok ? "✓ Moondream 3.1" : `缺：hf download moondream/moondream3.1-9B-A2B model.safetensors --local-dir model-cache/moondream31/weights`}</span></div>
                   <div className="it"><b>出題模型</b><span className={e.judge_ok ? "" : "bad"}>{!e.judge_ok ? "缺：model-cache/judge（Qwen3-VL-32B）或 model-cache/judge-8b" : e.judge_name ? `${e.judge_name}${e.judge_name === "Qwen3-VL-8B" ? "（GPU 放不下 32B；CCTV 考卷上不比 32B 差；GPU 空了重啟回 32B）" : ""}` : "還沒載入（第一次標註時載入）"}</span></div>
+                  <div className="it"><b>備份</b><span className={status?.backup ? "" : "warn-text"} title="每天一份資料庫（題、答案、審核），留 7 份；圖檔不在裡面">{status?.backup ? `${status.backup.at.replace("T", " ")} · 共 ${status.backup.count} 份（workspace/backups）` : "還沒有備份"}</span></div>
                   {e.last_error && <div className="it"><b>上次錯誤</b><span className="bad" style={{ overflowWrap: "anywhere" }}>{e.last_error} <button className="ghost" onClick={() => fetch("/api/status/clear-error", { method: "POST" }).then(refresh)}>知道了</button></span></div>}
                 </>}
               </div>

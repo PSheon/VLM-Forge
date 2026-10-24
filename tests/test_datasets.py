@@ -288,10 +288,188 @@ def test_remove_images_takes_their_questions_and_owned_files(client, tmp_path):
     r = client.post(
         f"/api/datasets/{ds['id']}/images/remove", json={"image_ids": [red, green, fid]}
     ).json()
-    assert r == {"removed": 3, "items": 3 * per_image, "files": 1}  # green is in "other"
+    assert r["removed"] == 3 and r["items"] == 3 * per_image
     after = client.get(f"/api/datasets/{ds['id']}").json()
     assert after["images"] == 1 and after["items"] == per_image
+    # 復原 brings back the images and their questions
+    back = client.post(
+        f"/api/datasets/{ds['id']}/images/restore", params={"trash_id": r["trash_id"]}
+    ).json()
+    assert back == {"restored": 3, "items": 3 * per_image}
+    assert client.get(f"/api/datasets/{ds['id']}").json()["items"] == before["items"]
+    r = client.post(
+        f"/api/datasets/{ds['id']}/images/remove", json={"image_ids": [red, green, fid]}
+    ).json()
+    from vlmforge.server.datasets import DatasetStore
+
+    store = DatasetStore(client.ws)
+    assert store.purge(days=7) == 0 and Path(red_path).exists()  # still restorable
+    assert store.purge(days=0) == 1  # red's file goes; green is in "other"; folder files stay
     assert not Path(red_path).exists() and (folder / "f.png").exists()
     assert client.get(f"/api/datasets/{other['id']}").json()["images"] == 1
     assert client.get(f"/api/queues/{q['id']}").json()["unfinished"]["images"] == 0
     assert {c["image_id"] for c in client.get(f"/api/datasets/{ds['id']}/grid").json()} == {up[2]}
+
+
+def test_relabel_keeps_human_answers_and_asks_the_rest_again(client):
+    """Relabelling replaces machine questions with ones from the current settings; a question a
+    human saved stays and is not asked twice; the old batch does not turn 「中斷」."""
+    ds = client.post("/api/datasets", json={"name": "re", "config": {"probes": []}}).json()
+    for c in ("red", "green"):
+        client.post(
+            f"/api/datasets/{ds['id']}/upload", files={"file": (f"{c}.png", png(c), "image/png")}
+        )
+    old = wait(client, client.post(f"/api/datasets/{ds['id']}/label").json()["id"])
+    items = client.get(f"/api/datasets/{ds['id']}/grid").json()
+    img = items[0]["image_id"]
+    rev = client.get("/api/review/image/" + img).json()["items"]
+    human = next(it for it in rev if it["skill"] == "query")
+    client.post(
+        f"/api/items/{human['id']}/review",
+        json={"action": "correct", "reviewer": "P", "label": {"text": "7"}},
+    )
+    before = client.get(f"/api/datasets/{ds['id']}").json()["items"]
+    # the settings change: a probe object is now asked on every image
+    client.post(f"/api/datasets/{ds['id']}", json={"config": {"probes": ["forklift"]}})
+    r = client.post(f"/api/datasets/{ds['id']}/relabel", json={"image_ids": [img]}).json()
+    assert r["reset"] == {"dropped": len(rev) - 1, "kept": 1}
+    wait(client, r["id"])
+    after = client.get("/api/review/image/" + img).json()["items"]
+    keys = [(it["skill"], it["prompt"]) for it in after]
+    assert len(keys) == len(set(keys))  # nothing asked twice
+    assert ("detect", "forklift") in keys  # the new setting applies
+    kept = next(it for it in after if it["id"] == human["id"])
+    assert kept["label"] == {"text": "7"} and kept["status"] == "corrected"
+    assert client.get(f"/api/datasets/{ds['id']}").json()["items"] == before + 1
+    assert client.get(f"/api/queues/{old['id']}").json()["unfinished"]["images"] == 0
+
+
+def test_add_a_question_while_reviewing(client):
+    ds = client.post("/api/datasets", json={"name": "add"}).json()
+    img = client.post(
+        f"/api/datasets/{ds['id']}/upload", files={"file": ("a.png", png("red"), "image/png")}
+    ).json()["image_ids"][0]
+    body = {"image_id": img, "skill": "detect", "prompt": " forklift ", "reviewer": "P"}
+    it = client.post(f"/api/datasets/{ds['id']}/items", json={**body, "action": "pending"}).json()
+    assert it["status"] == "pending" and it["prompt"] == "forklift" and it["label"] is None
+    nxt = client.get("/api/review/next-image", params={"reviewer": "P", "dataset_id": ds["id"]})
+    assert [i["id"] for i in nxt.json()["items"]] == [it["id"]]
+    bad = client.post(f"/api/datasets/{ds['id']}/items", json={**body, "prompt": " "})
+    assert bad.status_code == 422
+    assert client.get(f"/api/datasets/{ds['id']}").json()["batches"] == []  # not a 「上一輪」
+    # a new dataset with the same name must not inherit the deleted one's hand-made queue
+    client.delete(f"/api/datasets/{ds['id']}")
+    ds2 = client.post("/api/datasets", json={"name": "add"}).json()
+    img2 = client.post(
+        f"/api/datasets/{ds2['id']}/upload", files={"file": ("b.png", png("blue"), "image/png")}
+    ).json()["image_ids"][0]
+    client.post(
+        f"/api/datasets/{ds2['id']}/items",
+        json={**body, "image_id": img2, "action": "pending"},
+    )
+    assert client.get(f"/api/datasets/{ds2['id']}").json()["items"] == 1
+
+
+def test_near_duplicates_are_skipped_and_found(client):
+    """The same frame again (re-upload, or a re-encoded copy) is skipped; a frame where
+    something changed is kept; 選取幾乎重複 finds repeats already in a dataset."""
+    ds = client.post("/api/datasets", json={"name": "dup"}).json()
+
+    def scene(person: bool, noise: int = 0, fmt: str = "PNG") -> bytes:
+        im = Image.new("RGB", (320, 180), (120, 120, 120))
+        for x in range(0, 320, 40):  # some structure, like shelves
+            im.paste((60 + x // 4, 90, 140), (x, 20, x + 20, 160))
+        if person:
+            im.paste((230, 40, 40), (150, 60, 175, 150))
+        if noise:
+            im.putpixel((noise, noise), (255, 255, 255))
+        buf = io.BytesIO()
+        im.save(buf, format=fmt, quality=90)
+        return buf.getvalue()
+
+    def up(data, name):
+        return client.post(
+            f"/api/datasets/{ds['id']}/upload", files={"file": (name, data, "image/png")}
+        ).json()
+
+    assert up(scene(False), "a.png")["added"] == 1
+    assert up(scene(False), "again.png") == {"added": 0, "skipped": 1, "image_ids": []}
+    assert up(scene(False, noise=5, fmt="JPEG"), "copy.jpg")["skipped"] == 1  # re-encoded copy
+    assert up(scene(True), "person.png")["added"] == 1  # a person walked in: keep
+    # a dataset that already holds repeats (added before the check existed)
+    raw = client.ws.add_image_bytes(scene(False, noise=9), "upload", "png")
+    from vlmforge.server.datasets import DatasetStore
+
+    DatasetStore(client.ws).add_image(ds["id"], raw["id"])
+    assert client.get(f"/api/datasets/{ds['id']}/duplicates").json() == {"image_ids": [raw["id"]]}
+
+
+def test_video_and_gif_become_frames(client, tmp_path):
+    import av
+
+    ds = client.post("/api/datasets", json={"name": "vid"}).json()
+    mp4 = tmp_path / "cam.mp4"
+    with av.open(str(mp4), "w") as c:  # 6 s at 10 fps: a block moves right every second
+        s = c.add_stream("mpeg4", rate=10)
+        s.width, s.height, s.pix_fmt = 160, 96, "yuv420p"
+        for k in range(60):
+            im = Image.new("RGB", (160, 96), (90, 90, 90))
+            im.paste((240, 200, 0), (10 + (k // 10) * 22, 30, 30 + (k // 10) * 22, 60))
+            for pkt in s.encode(av.VideoFrame.from_image(im)):
+                c.mux(pkt)
+        for pkt in s.encode():
+            c.mux(pkt)
+    r = client.post(
+        f"/api/datasets/{ds['id']}/upload",
+        params={"every": 2},
+        files={"file": ("cam.mp4", mp4.read_bytes(), "video/mp4")},
+    ).json()
+    assert r["added"] == 3 and r["skipped"] == 0  # t = 0, 2, 4 s
+    frames = [Image.new("RGB", (80, 48), c) for c in ("red", "red", "blue", "green")]
+    frames[1].putpixel((3, 3), (250, 250, 250))  # GIF writers merge identical frames
+    buf = io.BytesIO()
+    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=1000)
+    g = client.post(
+        f"/api/datasets/{ds['id']}/upload",
+        params={"every": 1},
+        files={"file": ("walk.gif", buf.getvalue(), "image/gif")},
+    ).json()
+    assert g["added"] == 3 and g["skipped"] == 1  # the second red frame repeats the first
+    assert not list((client.tmp / "workspace" / "tmp").glob("*"))  # the upload is cleaned up
+
+
+def test_scores_by_object(client):
+    """③'s 按物件 table: per-object rows from the base report and each finished run, with the
+    number of questions behind each."""
+    import json as _j
+
+    from vlmforge import paths
+
+    man = client.tmp / "heldout-x.jsonl"
+    rows = [{"skill": "detect", "object": "person", "image": "a"}] * 3
+    rows += [{"skill": "query", "question": "Is the door open?", "image": "b"}]
+    man.write_text("\n".join(_j.dumps(r) for r in rows))
+    paths.BASELINES.mkdir(parents=True, exist_ok=True)
+    metrics = {"detect/macro": 0.4, "detect:person/f1": 0.1, "detect@cctv:person/f1": 0.1}
+    metrics["query:Is the door open?/exact"] = 0.5
+    (paths.BASELINES / "base-heldout-x.json").write_text(
+        _j.dumps({"metrics": metrics, "manifest": str(man)})
+    )
+    run = paths.RUNS / "ft-a"
+    run.mkdir(parents=True)
+    (run / "pipeline.json").write_text(_j.dumps({"name": "ft-a", "state": "done", "evals": {}}))
+    (run / "eval-ft-a-heldout-x.json").write_text(
+        _j.dumps({"metrics": {"detect:person/f1": 0.6, "query:Is the door open?/exact": 1.0}})
+    )
+    r = client.get("/api/test/objects", params={"suite": "heldout-x"}).json()["rows"]
+    assert r == [
+        {"skill": "detect", "object": "person", "n": 3, "base": 0.1, "runs": {"ft-a": 0.6}},
+        {
+            "skill": "query",
+            "object": "Is the door open?",
+            "n": 1,
+            "base": 0.5,
+            "runs": {"ft-a": 1.0},
+        },
+    ]
+    assert client.get("/api/test/objects", params={"suite": "nope"}).status_code == 404

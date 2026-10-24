@@ -1,7 +1,7 @@
 // ② 檢查 (docs/ui-spec §4): one image, one question at a time; every key saves and moves on.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { answerText, api, emptyLabel, itemTitle, judgeText, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
+import { answerText, api, emptyLabel, itemTitle, judgeText, skillLabel, summary, type Dataset, type ImageReview, type ImageSummary, type Item, type Pred } from "../api";
 import Canvas from "../components/Canvas";
 import { ActionsHead, Dialog, Pill, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
@@ -21,8 +21,10 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
   const [images, setImages] = useState<ImageSummary[]>([]);
   const [msg, setMsg] = useState("");
   const [pendingJump, setPendingJump] = useState<(() => void) | null>(null);
+  const [adding, setAdding] = useState<{ skill: "detect" | "point" | "query"; prompt: string } | null>(null);
   const started = useRef(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const addRef = useRef<HTMLInputElement>(null);
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
 
@@ -169,7 +171,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       const t = e.target as HTMLElement;
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
       if (typing) { if (e.key === "Escape") t.blur(); if (e.key === "Enter" && !e.shiftKey && (t.tagName === "TEXTAREA" || t.classList.contains("count"))) { e.preventDefault(); t.blur(); accept(); } return; }
-      if (!review || pendingJump) return;
+      if (!review || pendingJump || adding) return;
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) { e.preventDefault(); reopenLast(); return; }
       if (!e.metaKey && !e.ctrlKey) { setPressed(e.key.length === 1 ? e.key.toUpperCase() : e.key); window.setTimeout(() => setPressed(""), 260); }
       if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); confirmRest(); }
@@ -189,11 +191,27 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       else if (e.key === "ArrowLeft" && !e.shiftKey && !spatialSelected()) goTo(idx - 1);
       else if (e.key === "s" || e.key === "S") guarded(() => nextImage(review.image.id));
       else if (e.key === "g" || e.key === "G") setGrid((g) => !g);
+      else if (e.key === "a" || e.key === "A") { e.preventDefault(); guarded(() => setAdding({ skill: "detect", prompt: "" })); }
       else if (e.key === "Escape") { if (grid) setGrid(false); else if (!dirty) onExit?.(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+  // ＋加一題: the teacher missed something; the new question joins this image's list as 待看
+  const addQuestion = async () => {
+    if (!adding || !review || !adding.prompt.trim()) return;
+    const prompt = adding.skill === "query" ? adding.prompt.trim() : adding.prompt.trim().toLowerCase();
+    if (items.some((x) => x.skill === adding.skill && x.prompt === prompt)) { say("這張已經有這一題", "warn"); return; }
+    try {
+      const created = await api.saveDatasetItem(dsId, { image_id: review.image.id, skill: adding.skill, prompt, action: "pending", reviewer });
+      setAdding(null);
+      const order = open(await api.reviewImage(review.image.id));
+      const k = order.findIndex((x) => x.id === created.id);
+      if (k >= 0) { setIdx(k); setLabel(initial(order[k])); }
+      say(`加了一題：${itemTitle(created)}`, "ok");
+      loadSum();
+    } catch (e) { say(String(e), "bad"); }
+  };
   const spatialSelected = () => !!document.querySelector(".cv-stage .sel"); // arrows nudge a selected box instead
 
   const shell = (body: ReactNode) => <div className="page"><div className="col">{header?.()}{body}</div><div className="actions"><ActionsHead /></div></div>;
@@ -262,11 +280,23 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
             <button onClick={() => guarded(() => nextImage(review.image.id))} title="S">跳過這張</button>
           </div>
           <div className="qlist">
+            <button className="ghost add-q" onClick={() => guarded(() => setAdding({ skill: "detect", prompt: "" }))} title="A：導師漏掉的物件或問題">＋ 加一題</button>
             {items.map((x, i) => <div key={x.id} className={`it${i === idx ? " cur" : ""}${x.status !== "pending" ? " done" : ""}`} onClick={() => goTo(i)} title={itemTitle(x)}><i className={`dot ${x.status !== "pending" ? "done" : x.verdict === "fix" ? "fix" : x.verdict === "accept" ? "acc" : "none"}`} /><span className="t">{itemTitle(x)}</span><span className="muted small">{x.status !== "pending" ? statusLabel[x.status] : x.verdict === "fix" ? "不一致" : x.verdict === "accept" ? (x.spot ? "抽查" : "一致") : "未比對"}</span></div>)}
           </div>
         </Fade>
       </div>
-      <KeyBar pressed={pressed} keys={[["Enter", changed ? "存修正" : "沒問題"], ...(qt === "yesno" ? [["Y", "yes"], ["N", "no"]] as [string, string][] : qt === "count" ? [["0–9", "數字"], ["↑↓", "加減"]] as [string, string][] : []), ["D", "丟棄"], ...(it.teacher ? [["1", "用預標"]] as [string, string][] : []), ...(it.pred ? [["2", "用模型"]] as [string, string][] : []), ...(spatial ? [...(it.teacher?.boxes?.length ? [["3", "補預標缺的"]] as [string, string][] : []), ...(pair ? [["P", syncPoint ? "同步 point：開" : "同步 point：關"]] as [string, string][] : []), ["Tab", "選取"], ["Del", "刪選取"], ["⌫", "刪最後"], ["F", "全圖"]] as [string, string][] : qt === "text" || it.skill === "caption" ? [["E", "改文字"]] as [string, string][] : []), ["←→", "換題"], ["Shift+Enter", `剩 ${pendingLeft} 題全存`], ["S", "跳過"], ["G", "所有圖"], ["Esc", "回圖片"]]} />
+      <KeyBar pressed={pressed} keys={[["Enter", changed ? "存修正" : "沒問題"], ...(qt === "yesno" ? [["Y", "yes"], ["N", "no"]] as [string, string][] : qt === "count" ? [["0–9", "數字"], ["↑↓", "加減"]] as [string, string][] : []), ["D", "丟棄"], ...(it.teacher ? [["1", "用預標"]] as [string, string][] : []), ...(it.pred ? [["2", "用模型"]] as [string, string][] : []), ...(spatial ? [...(it.teacher?.boxes?.length ? [["3", "補預標缺的"]] as [string, string][] : []), ...(pair ? [["P", syncPoint ? "同步 point：開" : "同步 point：關"]] as [string, string][] : []), ["Tab", "選取"], ["Del", "刪選取"], ["⌫", "刪最後"], ["F", "全圖"]] as [string, string][] : qt === "text" || it.skill === "caption" ? [["E", "改文字"]] as [string, string][] : []), ["←→", "換題"], ["Shift+Enter", `剩 ${pendingLeft} 題全存`], ["S", "跳過"], ["A", "加一題"], ["G", "所有圖"], ["Esc", "回圖片"]]} />
+      <Dialog open={!!adding} onClose={() => setAdding(null)}>
+        <h2>這張圖加一題</h2>
+        <div className="hint muted">導師漏掉的物件或問題。加了就排在這張的題目裡，照平常的方式作答、存。</div>
+        {adding && (
+          <>
+            <div className="row">{(["detect", "point", "query"] as const).map((s) => <button key={s} className={adding.skill === s ? "cur" : ""} onClick={() => { setAdding({ ...adding, skill: s }); addRef.current?.focus(); }}>{skillLabel[s]}</button>)}</div>
+            <input ref={addRef} autoFocus value={adding.prompt} onChange={(e) => setAdding({ ...adding, prompt: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addQuestion(); } }} placeholder={adding.skill === "query" ? "問題（英文），例如 Is the exit blocked?" : "物件（英文），例如 forklift"} />
+            <div className="row" style={{ justifyContent: "flex-end" }}><button onClick={() => setAdding(null)}>取消</button><button className="primary" disabled={!adding.prompt.trim()} onClick={addQuestion}>加入</button></div>
+          </>
+        )}
+      </Dialog>
       <Dialog open={!!pendingJump} onClose={() => setPendingJump(null)}>
         <h2>有改動還沒存</h2>
         <div className="hint">要丟掉這題的改動嗎？</div>

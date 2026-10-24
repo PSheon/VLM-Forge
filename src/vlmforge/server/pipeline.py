@@ -251,6 +251,16 @@ class Pipeline:
                 return
             if rc != 0:
                 raise RuntimeError(f"training exited with {rc} (see runs/{name}/train.log)")
+            # every saved checkpoint is a candidate: keep the best on the val splits
+            st["phase"] = "pick"
+            self._write(name, st)
+            val = [str(v) for v in st.get("val_manifests", {}).values()]
+            self._call(name, self._cmd("pick", str(run_dir), "--val", *val), log)
+            if name in self.cancelled:
+                st["state"], st["phase"] = "cancelled", "cancelled"
+                return
+            picked = run_dir / "checkpoints.json"
+            st["checkpoints"] = json.loads(picked.read_text()) if picked.exists() else None
             adapter = run_dir / f"{name}.pt"
             if not adapter.exists():
                 raise RuntimeError("training produced no adapter")

@@ -170,6 +170,7 @@ export function RunCard({ r, go }: { r: Run; go: (s: Step) => void }) {
               {r.gate.skills.map((s) => [<span key={s.skill + "a"}>{s.skill}</span>, <span key={s.skill + "b"} className="num">{fmt(s.base)}</span>, <span key={s.skill + "c"} className="num">{fmt(s.adapter)}</span>, <span key={s.skill + "d"} className={`num ${s.delta >= 0 ? "ok" : "bad"}`}>{fmtDelta(s.delta)}</span>, <Pill key={s.skill + "e"} kind={s.ok ? "ok" : "bad"}>{s.ok ? "PASS" : "FAIL"}</Pill>])}
             </div>
           )}
+          {r.checkpoints && r.checkpoints.best !== null && r.checkpoints.steps.length > 1 && <div className="muted" title={Object.entries(r.checkpoints.scores).map(([s, v]) => `第 ${s} 步：${v}`).join("\n")}>用第 <b>{r.checkpoints.best}</b> 步的模型（{r.checkpoints.by === "val" ? `驗證集分數最高 ${fmt(r.checkpoints.scores[String(r.checkpoints.best)])}` : r.checkpoints.by === "val_loss" ? "驗證 loss 最低" : "最後一步"}；共 {r.checkpoints.steps.length} 個檢查點：{r.checkpoints.steps.map((s) => `${s}${r.checkpoints!.scores[String(s)] !== undefined ? ` ${fmt(r.checkpoints!.scores[String(s)])}` : ""}`).join(" · ")}）</div>}
           {Object.entries(r.evals).filter(([k]) => k.startsWith("val-")).map(([k, m]) => <div key={k} className="muted">{suiteLabel(k)}：{Object.entries(m).map(([s, v]) => `${s} ${fmt(v)}`).join(" · ")}</div>)}
           {r.gate && <div className={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "比 base 好（過關）" : "沒有比 base 好"}。規則（工廠 CCTV 考卷）：每個 skill ≥ base − 1.0 點，且至少一個進步</div>}
           {r.state === "done" && <button className="ghost" onClick={() => go("test")} style={{ alignSelf: "flex-start" }}>去測試看差異 →</button>}
@@ -198,6 +199,7 @@ function Curve({ r }: { r: Run }) {
       <path d={path(tr.map((p) => ({ step: p.step, v: p.loss! })))} fill="none" stroke="var(--acc)" strokeWidth={1.6} />
       <path d={path(va.map((p) => ({ step: p.step, v: p.val! })))} fill="none" stroke="var(--box2)" strokeWidth={1.6} strokeDasharray="4 3" />
       {va.map((p) => <circle key={p.step} cx={X(p.step)} cy={Y(p.val!)} r={3} fill="var(--box2)" />)}
+      {r.checkpoints?.best != null && r.checkpoints.steps.length > 1 && <g><line x1={X(r.checkpoints.best)} y1={4} x2={X(r.checkpoints.best)} y2={H - pad} stroke="var(--ok)" strokeDasharray="2 3" /><text x={X(r.checkpoints.best) + 3} y={14} fontSize={10} fill="var(--ok)">採用</text></g>}
       {held !== undefined && <text x={W - 150} y={16} fontSize={10} fill="var(--ok)">● held-out detect {held.toFixed(3)}</text>}
       <text x={pad + 6} y={12} fontSize={10} fill="var(--muted)">— train　- - val（每次評估）</text>
     </svg>

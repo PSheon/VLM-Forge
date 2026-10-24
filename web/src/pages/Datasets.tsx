@@ -104,6 +104,9 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [openImage, setOpenImage] = useState<string | null>(null);
   const [full, setFull] = useState<Dataset | null>(null);
   const [grid, setGrid] = useState<GridCell[] | null>(null);
+  const [dups, setDups] = useState<string[]>([]);
+  const [show, setShow] = useState<GridFilter>("all");
+  const [every, setEvery] = useState(5); // seconds between frames taken from a video
   const [dir, setDir] = useState("");
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -118,12 +121,13 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [askDelete, setAskDelete] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [askRemove, setAskRemove] = useState(false);
+  const [askRelabel, setAskRelabel] = useState(false);
   const lastPick = useRef<string | null>(null);
   const [rename, setRename] = useState(false);
   const [newName, setNewName] = useState(d.name);
   const [exp, setExp] = useState<{ jsonl: string; rows: number; zip?: string; images?: number } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const load = useCallback(() => { api.dataset(d.id).then(setFull).catch(() => undefined); api.datasetGrid(d.id).then(setGrid).catch(() => undefined); }, [d.id]);
+  const load = useCallback(() => { api.dataset(d.id).then(setFull).catch(() => undefined); api.datasetGrid(d.id).then(setGrid).catch(() => undefined); api.duplicates(d.id).then((r) => setDups(r.image_ids)).catch(() => undefined); }, [d.id]);
   useEffect(() => { load(); }, [load, d.updated_at, d.items, d.pending]);
   const batch: Batch | undefined = full?.batches?.[0];
   const running = batch?.job?.state === "running";
@@ -142,12 +146,14 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const addFiles = async (files: FileList | File[] | null) => {
     if (!files || !files.length) return;
     setBusy(true);
-    try { let added = 0; for (const f of Array.from(files)) added += (await api.uploadToDataset(d.id, f)).added; say(`加入 ${added} 張`); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
+    const list = Array.from(files), videos = list.filter((f) => isVideo(f.name)).length;
+    if (videos) say(`影片抽幀中（每 ${every} 秒一張）…`, "ok", { ms: 4000 });
+    try { let added = 0, skipped = 0; for (const f of list) { const r = await api.uploadToDataset(d.id, f, every); added += r.added; skipped += r.skipped; } say(addedText(added, skipped)); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
   };
   const addFolder = async () => {
     if (!dir.trim()) return;
     setBusy(true);
-    try { const r = await api.addFolder(d.id, dir.trim()); say(`加入 ${r.added} 張`); setDir(""); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
+    try { const r = await api.addFolder(d.id, dir.trim(), every); say(addedText(r.added, r.skipped)); setDir(""); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
   };
   const label = async () => {
     askNotify();
@@ -160,8 +166,9 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const doRename = async () => { try { await api.updateDataset(d.id, { name: newName.trim() }); setRename(false); say("改好了"); reload(); } catch (e) { say(String(e), "bad"); } };
   // multi-select on the grid: the checkbox (or any thumb once something is picked) toggles,
   // Shift extends from the last pick; the removal itself lives in the action column
+  const visible = (grid ?? []).filter(GRID_FILTERS[show].test);
   const togglePick = (id: string, shift: boolean) => {
-    const ids = (grid ?? []).map((g) => g.image_id);
+    const ids = visible.map((g) => g.image_id); // Shift ranges follow what is on screen
     const a = shift && lastPick.current ? ids.indexOf(lastPick.current) : -1, b = ids.indexOf(id); // read the ref now, not inside the updater
     setPicked((cur) => {
       const next = new Set(cur);
@@ -186,9 +193,18 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   });
   const pickedCells = (grid ?? []).filter((g) => picked.has(g.image_id));
   const pickedQ = pickedCells.reduce((s, g) => s + g.n, 0), pickedDone = pickedCells.reduce((s, g) => s + g.n - g.pending, 0);
+  const pickedMachine = pickedCells.reduce((s, g) => s + g.n - (g.kept ?? 0), 0); // what 重新標註 replaces
+  const doRelabel = async () => {
+    setAskRelabel(false); setBusy(true); askNotify();
+    try { if (cfgDirty) await saveConfig(); const r = await api.relabel(d.id, [...picked]); setPicked(new Set()); say(`重新標註 ${r.job?.total ?? picked.size} 張：換掉 ${r.reset.dropped} 題，保留你看過的 ${r.reset.kept} 題`, "ok", { ms: 3000 }); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
+  };
   const doRemove = async () => {
     setAskRemove(false); setBusy(true);
-    try { const r = await api.removeImages(d.id, [...picked]); setPicked(new Set()); say(`移除了 ${r.removed} 張（${r.items} 題）`, "warn"); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
+    try {
+      const r = await api.removeImages(d.id, [...picked]); setPicked(new Set()); reload(); load();
+      const undo = r.trash_id === null ? undefined : { label: "復原", run: async () => { try { const b = await api.restoreImages(d.id, r.trash_id!); say(`復原了 ${b.restored} 張（${b.items} 題）`, "ok"); reload(); load(); } catch (e) { say(String(e), "bad"); } } };
+      say(`移除了 ${r.removed} 張（${r.items} 題）`, "warn", { action: undo, ms: 8000 });
+    } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
   };
   const doDelete = async () => { await api.deleteDataset(d.id); say(`刪了 ${d.name}`, "warn"); setAskDelete(false); onDeleted(); };
   const freeGb = status?.engine.gpu_free_gb ?? null;
@@ -231,16 +247,18 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
           <div className="col">
             {header()}
             <div className={`drop${drag ? " on" : ""}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}>
-              把照片拖到這裡，或 <button onClick={() => fileInput.current?.click()} disabled={busy}>選檔案</button>（可多張、可 zip）
-              <input ref={fileInput} type="file" accept="image/*,.zip" multiple hidden onChange={(e) => addFiles(e.target.files)} />
+              把照片、zip 或影片拖到這裡，或 <button onClick={() => fileInput.current?.click()} disabled={busy}>選檔案</button>
+              <div className="small">影片每 <select value={every} onChange={(e) => setEvery(+e.target.value)} aria-label="影片每幾秒抽一張">{[1, 2, 5, 10, 30, 60].map((s) => <option key={s} value={s}>{s}</option>)}</select> 秒抽一張；和已有的圖幾乎一樣的會略過</div>
+              <input ref={fileInput} type="file" accept="image/*,.zip,video/*,.gif" multiple hidden onChange={(e) => addFiles(e.target.files)} />
             </div>
             <div className="row">
-              <input placeholder="GB300 上的資料夾路徑，例如 /home/paul/VLM-Forge/workspace/captures/1026" value={dir} onChange={(e) => setDir(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addFolder()} style={{ flex: 1 }} />
+              <input placeholder="GB300 上的資料夾路徑（圖片與影片），例如 /home/paul/VLM-Forge/workspace/captures/1026" value={dir} onChange={(e) => setDir(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addFolder()} style={{ flex: 1 }} />
               <button onClick={addFolder} disabled={busy || !dir.trim()}>加入資料夾</button>
             </div>
-            <div className="small muted">{picked.size ? `已選 ${picked.size} 張 · 點縮圖加選或取消 · Shift 連選 · Esc 取消選取` : grid?.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查 · 左上角 ☐ 多選` : grid === null ? "載入中…" : "還沒有圖"}</div>
+            <div className="small muted row">{picked.size ? `已選 ${picked.size} 張 · 點縮圖加選或取消 · Shift 連選 · Esc 取消選取` : grid?.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查 · 左上角 ☐ 多選` : grid === null ? "載入中…" : "還沒有圖"}{!picked.size && dups.length > 0 && <button className="ghost warn-text" onClick={() => setPicked(new Set(dups))} title="和更早加入的某張幾乎一模一樣（畫面裡沒有東西移動）">有 {dups.length} 張幾乎重複 → 選取</button>}</div>
             {grid === null && (full ?? d).images > 0 && <div className="thumbs" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))" }}>{Array.from({ length: Math.min(30, (full ?? d).images) }, (_, i) => <div key={i} className="skel" style={{ aspectRatio: "4/3", borderRadius: 4 }} />)}</div>}
-            <Grid cells={grid ?? []} picked={picked} onPick={togglePick} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
+            {!!grid?.length && <div className="row chips" role="group" aria-label="篩選">{(Object.keys(GRID_FILTERS) as GridFilter[]).map((k) => { const c = k === "all" ? grid.length : grid.filter(GRID_FILTERS[k].test).length; return (k === "all" || c > 0) && <button key={k} className={`chip-btn${show === k ? " cur" : ""}`} onClick={() => setShow(k)}>{GRID_FILTERS[k].label} <span className="muted">{c}</span></button>; })}</div>}
+            <Grid cells={visible} picked={picked} onPick={togglePick} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
           <div className="actions">
             <ActionsHead />
@@ -253,9 +271,15 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
               {cta && !cta.text.startsWith("去檢查") && pendingImgs > 0 && !running && <button className="ghost" onClick={() => setTab("review")}>去檢查（{pendingImgs} 張）→</button>}
             </div>
             <Pop show={picked.size > 0} className="panel col">
-              <div className="row" style={{ justifyContent: "space-between" }}><b>已選 {picked.size} 張</b><span className="row"><button className="ghost" onClick={() => setPicked(new Set((grid ?? []).map((g) => g.image_id)))}>全選</button><button className="ghost" onClick={() => setPicked(new Set())}>取消選取</button></span></div>
+              <div className="row" style={{ justifyContent: "space-between" }}><b>已選 {picked.size} 張</b><span className="row"><button className="ghost" onClick={() => setPicked(new Set(visible.map((g) => g.image_id)))} title={show === "all" ? "" : `只選目前篩選的 ${visible.length} 張`}>全選{show === "all" ? "" : `（${GRID_FILTERS[show].label}）`}</button><button className="ghost" onClick={() => setPicked(new Set())}>取消選取</button></span></div>
               <div className="small muted">{pickedQ ? `${pickedQ} 題，其中 ${pickedDone} 題已確認或自動通過` : "還沒標註"}</div>
-              {running ? <div className="hint warn-text">標註中，跑完或取消後才能移除</div> : <button className="ghost bad" onClick={() => setAskRemove(true)} disabled={busy}>從資料集移除 {picked.size} 張…</button>}
+              {running ? <div className="hint warn-text">標註中，跑完或取消後才能重新標註或移除</div> : (
+                <div className="row" style={{ justifyContent: "space-between" }}>
+                  <button onClick={() => setAskRelabel(true)} disabled={busy || labelBlocked} title={labelBlocked ? labelText : "用目前的 AI 導師設定重出這些圖的題；你看過的題保留"}>重新標註 {picked.size} 張…</button>
+                  <button className="ghost bad" onClick={() => setAskRemove(true)} disabled={busy}>從資料集移除…</button>
+                </div>
+              )}
+              {!running && labelBlocked && <div className="hint muted">{labelText}</div>}
             </Pop>
             {!!sp?.total && <SpotCard sp={sp} onOpen={() => { setSpotOnly(true); setTab("review"); }} />}
             {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
@@ -297,7 +321,8 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
 
       {tab === "review" && <Review spotOnly={spotOnly} setSpotOnly={setSpotOnly} reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} header={header} onExit={() => setTab("images")} />}
       </Fade>
-      <ConfirmDialog open={askRemove} title={`從 ${d.name} 移除 ${picked.size} 張？`} body={<>這些圖{pickedQ ? <>和它們的 <b>{pickedQ} 題</b>（已確認 {pickedDone} 題）</> : ""}會從資料集拿掉，之後訓練不會用到，不能復原。上傳的原檔沒有別的資料集在用就一起刪；GB300 資料夾裡的原檔不動。</>} confirmText={`移除 ${picked.size} 張`} danger onCancel={() => setAskRemove(false)} onConfirm={doRemove} />
+      <ConfirmDialog open={askRelabel} title={`重新標註 ${picked.size} 張？`} body={<>用<b>目前的 AI 導師設定</b>（{modeText}{probeList.length && mode !== "fixed" ? `、每張圖都問 ${probeList.join("／")}` : ""}）重出這些圖的題。自動通過與待看的 {pickedMachine} 題換掉；你看過、改過、丟棄或自己加的題保留，也不會重複出。約 20 秒/張。</>} confirmText={`重新標註 ${picked.size} 張`} onCancel={() => setAskRelabel(false)} onConfirm={doRelabel} />
+      <ConfirmDialog open={askRemove} title={`從 ${d.name} 移除 ${picked.size} 張？`} body={<>這些圖{pickedQ ? <>和它們的 <b>{pickedQ} 題</b>（已確認 {pickedDone} 題）</> : ""}會從資料集拿掉，之後訓練不會用到。移除後的提示可以「復原」；7 天後上傳的原檔（沒有別的資料集在用時）才真的刪掉，GB300 資料夾裡的原檔不動。</>} confirmText={`移除 ${picked.size} 張`} danger onCancel={() => setAskRemove(false)} onConfirm={doRemove} />
       <ConfirmDialog open={askDelete} title={`刪除 ${d.name}？`} body="只刪資料集與歸屬；圖和題留在工作區。" confirmText="刪除" typed={d.name} danger onCancel={() => setAskDelete(false)} onConfirm={doDelete} />
     </div>
   );
@@ -344,6 +369,20 @@ function BatchCard({ b, onCancel, onResume, busy, skippedNote }: { b: Batch; onC
     </div>
   );
 }
+
+// the grid's filter chips (a count each; empty ones are hidden)
+type GridFilter = "all" | "fix" | "pending" | "spot" | "done" | "unlabelled" | "val";
+const GRID_FILTERS: Record<GridFilter, { label: string; test: (g: GridCell) => boolean }> = {
+  all: { label: "全部", test: () => true },
+  fix: { label: "有不一致", test: (g) => (g.fix ?? 0) > 0 },
+  pending: { label: "待看", test: (g) => (g.pending ?? 0) > 0 },
+  spot: { label: "抽查", test: (g) => (g.spot ?? 0) > 0 },
+  done: { label: "看完", test: (g) => g.n > 0 && !g.pending },
+  unlabelled: { label: "沒標", test: (g) => g.n === 0 },
+  val: { label: "驗證集", test: (g) => g.split === "val" },
+};
+const isVideo = (name: string) => /\.(mp4|mov|avi|mkv|m4v|ts|webm|gif)$/i.test(name);
+const addedText = (added: number, skipped: number) => `加入 ${added} 張${skipped ? `（略過 ${skipped} 張：已經有或幾乎一樣）` : ""}`;
 
 function Grid({ cells, picked, onPick, onOpen }: { cells: GridCell[]; picked: Set<string>; onPick: (id: string, shift: boolean) => void; onOpen: (c: GridCell) => void }) {
   if (!cells.length) return null;
