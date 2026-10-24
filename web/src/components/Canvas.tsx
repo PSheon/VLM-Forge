@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Pop } from "./motion";
 import type { Pred, Skill } from "../api";
+import { center, inBox, iou, round4 } from "../geometry";
 
 type Drag =
   | { kind: "new"; x0: number; y0: number; x1: number; y1: number }
@@ -187,8 +188,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
     else {
       // inside a pre-label box that has no point yet: snap to its centre (Alt = exactly here)
       const b = e.altKey ? undefined : altBoxes.find((bb) => inBox([x, y], bb) && !points.some((q) => inBox(q, bb)));
-      const p = b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [x, y];
-      onChange!({ points: [...points, [+p[0].toFixed(4), +p[1].toFixed(4)]] }, b ? "加了一點（吸到預標框中心，Alt 可放原位）" : "加了一點");
+      onChange!({ points: [...points, b ? center(b) : [round4(x), round4(y)]] }, b ? "加了一點（吸到預標框中心，Alt 可放原位）" : "加了一點");
       setSel(points.length);
     }
   };
@@ -199,7 +199,7 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
     if (drag.kind === "new") setDrag({ ...drag, x1: x, y1: y });
     else if (drag.kind === "move") { const [bx0, by0, bx1, by1] = drag.orig; const w = bx1 - bx0, h = by1 - by0; const nx = clamp(x - drag.dx, 0, 1 - w), ny = clamp(y - drag.dy, 0, 1 - h); onChange!({ boxes: boxes.map((b, i) => (i === drag.i ? [nx, ny, nx + w, ny + h] : b)) }, "框已改"); }
     else if (drag.kind === "resize") { const b = boxes[drag.i].slice(); if (drag.corner === 0 || drag.corner === 2) b[0] = x; else b[2] = x; if (drag.corner === 0 || drag.corner === 1) b[1] = y; else b[3] = y; onChange!({ boxes: boxes.map((o, i) => (i === drag.i ? b : o)) }, "框已改"); }
-    else if (drag.kind === "point") onChange!({ points: points.map((p, i) => (i === drag.i ? [+x.toFixed(4), +y.toFixed(4)] : p)) }, "點已改");
+    else if (drag.kind === "point") onChange!({ points: points.map((p, i) => (i === drag.i ? [round4(x), round4(y)] : p)) }, "點已改");
   };
   const up = () => {
     if (drag?.kind === "new") { const b = fix([drag.x0, drag.y0, drag.x1, drag.y1]); if (b[2] - b[0] > 0.003 && b[3] - b[1] > 0.003) { onChange!({ boxes: [...boxes, b] }, "加了一框"); setSel(boxes.length); } }
@@ -210,7 +210,6 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
   const pct = (v: number) => `${v * 100}%`;
   // coverage against the pre-label (alt) boxes: a box is ✓ once the answer has a point inside
   // it (point) or a box overlapping it (detect, IoU > 0.3); a point inside no box is "out"
-  const inBox = (p: number[], b: number[]) => p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3];
   const altBoxes = (spatial && alt?.boxes) || [];
   const covered = altBoxes.map((b) => (skill === "point" ? points.some((p) => inBox(p, b)) : boxes.some((c) => iou(c, b) > 0.3)));
   const outside = skill === "point" && altBoxes.length ? points.map((p) => !altBoxes.some((b) => inBox(p, b))) : [];
@@ -257,5 +256,4 @@ export default function Canvas({ src, skill, value, onChange, alt, readOnly, lab
 }
 
 function clamp(v: number, lo = 0, hi = 1) { return Math.max(lo, Math.min(hi, v)); }
-function iou(a: number[], b: number[]) { const w = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])), h = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1])); const i = w * h; const u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i; return u > 0 ? i / u : 0; }
-function fix(b: number[]) { return [Math.min(b[0], b[2]), Math.min(b[1], b[3]), Math.max(b[0], b[2]), Math.max(b[1], b[3])].map((v) => +clamp(v).toFixed(4)); }
+function fix(b: number[]) { return [Math.min(b[0], b[2]), Math.min(b[1], b[3]), Math.max(b[0], b[2]), Math.max(b[1], b[3])].map((v) => round4(clamp(v))); }

@@ -1,4 +1,4 @@
-"""Auto-generated training data (GOALS §6): the tool picks images, writes the questions and
+"""Auto-generated training data (GOALS §4): the tool picks images, writes the questions and
 the teacher answers, the student answers, the judge compares, a human checks per image.
 
 Teacher = the judge model (Qwen3-VL-32B). One call per image returns objects with boxes,

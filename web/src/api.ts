@@ -188,7 +188,6 @@ export const api = {
   // ③ train
   train: (body: { name?: string; steps: number; lr: number; rank?: number; dataset_ids: number[]; region_head?: boolean }) => j<Run>(post("/api/train", body)),
   runs: () => j<{ runs: Run[]; trainable: number }>(fetch("/api/train")),
-  run: (name: string) => j<Run>(fetch(`/api/train/${name}`)),
   cancelRun: (name: string) => j<{ ok: true }>(post(`/api/train/${name}/cancel`, {})),
   deleteRun: (name: string) => j<{ ok: true }>(del(`/api/train/${name}`)),
   orinUrl: (name: string) => `/api/train/${name}/orin.zip`,

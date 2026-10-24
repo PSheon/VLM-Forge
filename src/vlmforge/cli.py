@@ -1,9 +1,11 @@
 """``forge`` command line.
 
-forge manifests                 held-out manifests from the Data Core release (GOALS §4)
+forge serve                     the UI (everything below is also a button there)
+forge manifests                 held-out manifests from the Data Core release (GOALS §7)
 forge eval SUITE [--adapter P]  score base (or base + adapter) on a held-out suite
-forge train CONFIG              LoRA fine-tune (vlmforge.train)
-forge gate --base .. --adapter .. --skill detect   the stage gate (GOALS §4)
+forge train CONFIG              LoRA fine-tune (vlmforge.train); the UI writes
+                                runs/<name>/config.yaml, so a run can be repeated by hand
+forge gate --base .. --adapter .. --skill multi   the pass / fail rule (GOALS §6)
 """
 
 from __future__ import annotations
@@ -35,27 +37,17 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("train", help="LoRA fine-tune from a YAML config")
     t.add_argument("config")
 
-    g = sub.add_parser("gate", help="compare base vs adapter reports (GOALS §4)")
+    g = sub.add_parser("gate", help="compare base vs adapter reports (GOALS §6)")
     g.add_argument("--base", type=Path, nargs="+", required=True)
     g.add_argument("--adapter", type=Path, nargs="+", required=True)
     g.add_argument("--skill", required=True, help="detect | point | query | caption | multi")
     g.add_argument("--json", type=Path, help="also write the result here")
 
-    s = sub.add_parser("serve", help="the supervision UI (GOALS §6)")
+    s = sub.add_parser("serve", help="the UI (GOALS §8)")
     s.add_argument("--host", default="0.0.0.0")
     s.add_argument("--port", type=int, default=8796)
     s.add_argument("--batch", type=int, default=16)
 
-    c = sub.add_parser("capture", help="one frame per NVR channel over RTSP (GOALS §7)")
-    c.add_argument("--out", type=Path, required=True)
-    c.add_argument("--url", required=True, help="template with {ip} and {ch} / {ch2}")
-    c.add_argument("--nvr", nargs="+", required=True)
-    c.add_argument("--channels", default="1-16")
-
-    x = sub.add_parser("export", help="reviewed items -> training rows (+ Data Core bundle)")
-    x.add_argument("name")
-    x.add_argument("--queue", type=int, nargs="*", help="queue ids (default: every queue)")
-    x.add_argument("--incoming", action="store_true", help="also write the intake bundle")
     return p
 
 
@@ -123,26 +115,6 @@ def main(argv: list[str] | None = None) -> int:
             Workspace(paths.WORKSPACE), Engine(batch_size=args.batch), paths.ROOT / "web" / "dist"
         )
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
-        return 0
-    if args.command == "capture":
-        from .capture import capture, parse_channels
-
-        log = capture(args.url, args.nvr, parse_channels(args.channels), args.out)
-        print(f"{len(log['frames'])} frames, {len(log['failed'])} failed -> {args.out}")
-        return 0 if log["frames"] else 1
-    if args.command == "export":
-        import json
-
-        from .server.export import export_incoming, export_train
-        from .server.workspace import Workspace
-
-        ws = Workspace(paths.WORKSPACE)
-        res = {"train": export_train(ws, args.queue or None, args.name)}
-        if args.incoming:
-            res["incoming"] = export_incoming(
-                ws, args.queue or None, args.name, paths.WORKSPACE / "incoming"
-            )
-        print(json.dumps(res, indent=1))
         return 0
     return 0
 

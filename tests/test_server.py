@@ -29,16 +29,16 @@ class StubEngine:
             return [{"points": [[0.5, 0.5]]} for _ in images]
         return [{"text": f"{model}: 2"} for _ in images]
 
-    def teacher_generate(self, path, focus="", topics=None):
-        return {
-            "objects": [{"name": "person", "boxes": [[0.25, 0.25, 0.75, 0.75]]}],
-            "questions": [{"q": "How many people are there?", "a": "2"}],
-            "caption": "A person in a room.",
-            "model": "stub",
-        }
-
     def teacher_generate_batch(self, paths, focus="", topics=None):
-        return [self.teacher_generate(p, focus, topics) for p in paths]
+        return [
+            {
+                "objects": [{"name": "person", "boxes": [[0.25, 0.25, 0.75, 0.75]]}],
+                "questions": [{"q": "How many people are there?", "a": "2"}],
+                "caption": "A person in a room.",
+                "model": "stub",
+            }
+            for _ in paths
+        ]
 
     def judge_items(self, items):
         # "shelf" items are flagged, everything else accepted
@@ -70,120 +70,9 @@ def client(tmp_path, monkeypatch):
     eng = StubEngine()
     c = TestClient(create_app(ws, eng))
     c.ws, c.eng = ws, eng
+    c.tmp_heldout = tmp_path / "heldout-cctv"
+    c.tmp_heldout.mkdir()
     return c
-
-
-def test_workbench_flow(client):
-    im = client.post("/api/images", files={"file": ("a.png", png_bytes("red"), "image/png")}).json()
-    assert client.get(f"/api/images/{im['id']}/file").status_code == 200
-    r = client.post(
-        "/api/infer", json={"image_id": im["id"], "skill": "detect", "prompt": "person"}
-    ).json()
-    assert r["pred"]["boxes"] == [[0.25, 0.25, 0.75, 0.75]]
-    saved = client.post(
-        "/api/items",
-        json={
-            "image_id": im["id"],
-            "skill": "detect",
-            "prompt": "person",
-            "pred": r["pred"],
-            "pred_model": "base",
-            "action": "correct",
-            "label": {"boxes": [[0.2, 0.2, 0.7, 0.7]]},
-            "reviewer": "Paul",
-        },
-    ).json()
-    assert saved["status"] == "corrected" and saved["origin"] == "workbench"
-    rows = client.ws.reviewed_rows()
-    assert rows[0]["boxes"] == [[0.2, 0.2, 0.7, 0.7]] and rows[0]["changed"] is True
-    assert rows[0]["label_origin"] == "human" and rows[0]["prefill"] == "base"
-
-
-def test_queue_claim_review_export(client):
-    ids = [
-        client.post("/api/images", files={"file": (f"{c}.png", png_bytes(c), "image/png")}).json()[
-            "id"
-        ]
-        for c in ("red", "green", "blue")
-    ]
-    q = client.post(
-        "/api/queues",
-        json={
-            "name": "cctv-1",
-            "skill": "detect",
-            "prompts": ["person", "shelf"],
-            "image_ids": ids,
-            "judge": False,
-        },
-    ).json()
-    assert q["total"] == 6
-    for _ in range(50):  # background predictions
-        job = client.get(f"/api/queues/{q['id']}").json()["job"]
-        if job["state"] == "done":
-            break
-        time.sleep(0.02)
-    assert job["state"] == "done" and job["done"] == 6
-    # two reviewers never get the same item
-    a = client.get(f"/api/queues/{q['id']}/next", params={"reviewer": "A"}).json()
-    b = client.get(f"/api/queues/{q['id']}/next", params={"reviewer": "B"}).json()
-    assert a["id"] != b["id"] and a["pred"]["boxes"]
-    # the same reviewer asking again gets their own claim back
-    assert (
-        client.get(f"/api/queues/{q['id']}/next", params={"reviewer": "A"}).json()["id"] == a["id"]
-    )
-    client.post(f"/api/items/{a['id']}/review", json={"action": "approve", "reviewer": "A"})
-    client.post(
-        f"/api/items/{b['id']}/review",
-        json={"action": "correct", "label": {"boxes": []}, "reviewer": "B"},
-    )
-    nxt = client.get(f"/api/queues/{q['id']}/next", params={"reviewer": "A"}).json()
-    assert nxt["id"] not in (a["id"], b["id"])
-    client.post(f"/api/items/{nxt['id']}/review", json={"action": "discard", "reviewer": "A"})
-    counts = client.get(f"/api/queues/{q['id']}").json()["counts"]
-    assert counts == {"pending": 3, "auto": 0, "approved": 1, "corrected": 1, "discarded": 1}
-    ex = client.post("/api/export", json={"name": "cctv-1", "incoming": True}).json()
-    assert ex["train"]["rows"] == 2 and ex["train"]["skills"] == {"detect": 2}
-    assert ex["incoming"]["items"] == 2 and ex["incoming"]["images"] == 1  # a, b: same image
-    bad = client.post(f"/api/items/{a['id']}/review", json={"action": "correct", "reviewer": "A"})
-    assert bad.status_code == 422
-
-
-def test_judge_triage(client, monkeypatch):
-    from vlmforge.server import workspace as wsmod
-
-    monkeypatch.setattr(wsmod, "SPOT_MIN", 1)
-    ids = [
-        client.post("/api/images", files={"file": (f"{c}.png", png_bytes(c), "image/png")}).json()[
-            "id"
-        ]
-        for c in ("red", "green", "blue", "white")
-    ]
-    q = client.post(
-        "/api/queues",
-        json={"name": "j", "skill": "detect", "prompts": ["person", "shelf"], "image_ids": ids},
-    ).json()
-    for _ in range(100):
-        q = client.get(f"/api/queues/{q['id']}").json()
-        if q["job"]["state"] == "done":
-            break
-        time.sleep(0.02)
-    assert q["job"]["state"] == "done", q["job"]
-    # 4 person items accepted: 1 spot-checked stays pending, 3 go auto; 4 shelf items flagged
-    assert q["verdicts"] == {"accept": 4, "fix": 4} and q["spot"] == 1
-    assert q["counts"]["auto"] == 3 and q["counts"]["pending"] == 5
-    # flagged items come first for the human, then the spot sample
-    first = client.get(f"/api/queues/{q['id']}/next", params={"reviewer": "A"}).json()
-    assert first["prompt"] == "shelf" and first["judge"]["verdict"] == "fix"
-    # export: auto items are machine_reviewed with the prediction as label
-    rows = client.ws.reviewed_rows([q["id"]])
-    assert len(rows) == 3 and {r["label_origin"] for r in rows} == {"machine_reviewed"}
-    assert rows[0]["boxes"] == [[0.25, 0.25, 0.75, 0.75]] and rows[0]["reviewer"] == "judge:stub"
-    # a single judge call from the workbench
-    v = client.post(
-        "/api/judge",
-        json={"image_id": ids[0], "skill": "detect", "prompt": "shelf", "pred": {"boxes": []}},
-    ).json()
-    assert v["verdict"] == "fix"
 
 
 def wait_done(client, qid):
@@ -195,33 +84,9 @@ def wait_done(client, qid):
     raise AssertionError("job did not finish")
 
 
-def test_autogen_queue_per_image_review(client, monkeypatch):
-    from vlmforge.server import workspace as wsmod
-
-    monkeypatch.setattr(wsmod, "SPOT_MIN", 0)
-    monkeypatch.setattr(wsmod, "SPOT_FRAC", 0)
-    for c in ("red", "green", "blue"):
-        client.post("/api/images", files={"file": (f"{c}.png", png_bytes(c), "image/png")})
-    r = client.post(
-        "/api/queues/auto",
-        json={"name": "auto-1", "sources": ["upload"], "n_images": 2},
-    )
-    assert r.status_code == 200, r.text
-    q = wait_done(client, r.json()["id"])
-    assert q["job"]["state"] == "done", q["job"]
-    # per image: detect person (agree), point person (agree), query ("base: 2" vs "2" ->
-    # agree), caption (judge stub accepts) -> both images clean; no spot -> all auto
-    assert q["total"] == 8 and q["counts"]["auto"] == 8 and q["job"]["triage"]["images_left"] == 0
-    rows = client.ws.reviewed_rows([q["id"]])
-    assert len(rows) == 8 and {r["label_origin"] for r in rows} == {"machine_reviewed"}
-    assert next(r for r in rows if r["skill"] == "query")["answer"] == "2"  # teacher text
-    assert next(r for r in rows if r["skill"] == "caption")["answer"] == "A person in a room."
-    # held-out can never be an autogen source
-    bad = client.post("/api/queues/auto", json={"name": "x", "sources": ["heldout"], "n_images": 1})
-    assert bad.status_code == 422
-
-
-def test_autogen_disagreement_goes_to_human_per_image(client):
+def test_review_claims_and_whole_image_decisions(client):
+    """A disagreeing student sends questions to humans per image; two reviewers never hold
+    the same image; one image's decisions are saved together; held-out folders are refused."""
     client.eng.infer = lambda images, skill, prompt, model="base": [
         {"boxes": []}
         if skill == "detect"
@@ -230,29 +95,39 @@ def test_autogen_disagreement_goes_to_human_per_image(client):
         else {"text": "5"}
         for _ in images
     ]
-    client.post("/api/images", files={"file": ("a.png", png_bytes("red"), "image/png")})
-    r = client.post(
-        "/api/queues/auto", json={"name": "auto-2", "sources": ["upload"], "n_images": 1}
-    )
-    q = wait_done(client, r.json()["id"])
-    assert q["counts"]["pending"] == 4 and q["verdicts"]["fix"] == 3  # caption: stub accepts
-    imgs = client.get(f"/api/queues/{q['id']}/images").json()
-    assert len(imgs) == 1 and imgs[0]["fix"] == 3
-    nx = client.get(f"/api/queues/{q['id']}/next-image", params={"reviewer": "P"}).json()
-    assert len(nx["items"]) == 4 and nx["items"][0]["teacher"]["boxes"]
-    decisions = [
-        {
-            "id": it["id"],
-            "action": "correct",
-            "label": it["teacher"] if it["skill"] != "caption" else {"text": "ok"},
-        }
-        for it in nx["items"]
-    ]
+    ds = client.post("/api/datasets", json={"name": "d"}).json()
+    for c in ("red", "green"):
+        client.post(
+            f"/api/datasets/{ds['id']}/upload",
+            files={"file": (f"{c}.png", png_bytes(c), "image/png")},
+        )
+    q = wait_done(client, client.post(f"/api/datasets/{ds['id']}/label").json()["id"])
+    assert q["job"]["state"] == "done", q["job"]
+    a = client.get("/api/review/next-image", params={"reviewer": "A", "dataset_id": ds["id"]})
+    b = client.get("/api/review/next-image", params={"reviewer": "B", "dataset_id": ds["id"]})
+    a, b = a.json(), b.json()
+    assert a["image"]["id"] != b["image"]["id"]  # each claim locks a whole image
+    pending = [it for it in a["items"] if it["status"] == "pending"]
+    fixes = [it for it in a["items"] if it["verdict"] == "fix"]
+    assert fixes and all(it["status"] == "pending" for it in fixes)  # every disagreement → human
     out = client.post(
-        f"/api/queues/{q['id']}/review-image", json={"reviewer": "P", "items": decisions}
+        "/api/review/image",
+        json={
+            "reviewer": "A",
+            "items": [
+                {"id": it["id"], "action": "correct", "label": it["teacher"]} for it in pending
+            ],
+        },
     ).json()
-    assert {o["status"] for o in out} == {"corrected"}
-    assert client.get(f"/api/queues/{q['id']}/next-image", params={"reviewer": "P"}).json() == {}
+    assert {o["status"] for o in out} == {"corrected"} and {o["reviewer"] for o in out} == {"A"}
+    nxt = client.get("/api/review/next-image", params={"reviewer": "A", "dataset_id": ds["id"]})
+    assert nxt.json() == {}  # the only image left is B's for the next 10 minutes
+    bad = client.post(
+        f"/api/items/{pending[0]['id']}/review", json={"action": "correct", "reviewer": "A"}
+    )
+    assert bad.status_code == 422  # correct needs a label
+    held = client.post(f"/api/datasets/{ds['id']}/folder", json={"dir": str(client.tmp_heldout)})
+    assert held.status_code == 422
 
 
 def test_compare_and_status(client):
@@ -295,7 +170,7 @@ def test_item_row_shapes():
 
 
 def test_retriage_keeps_the_spot_sample(tmp_path, monkeypatch):
-    """Re-running triage (POST /api/queues/{id}/triage) on a half-reviewed batch must not
+    """Re-running triage (e.g. on 接著跑) over a half-reviewed batch must not
     re-draw the spot check: once it auto-passed 128 of 149 sampled questions."""
     from vlmforge.server import workspace as wsmod
 

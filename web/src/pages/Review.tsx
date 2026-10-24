@@ -5,6 +5,7 @@ import { answerText, api, emptyLabel, itemTitle, judgeText, summary, type Datase
 import Canvas from "../components/Canvas";
 import { ActionsHead, Dialog, Pill, useToast } from "../components/ui";
 import { Fade, Pop } from "../components/motion";
+import { center, inBox, iou } from "../geometry";
 import type { Step } from "../App";
 
 export default function Review({ reviewer, datasetId, openImage, onOpened, refresh, go, setGuard, header, onExit, spotOnly = false, setSpotOnly }: { reviewer: string; datasetId: number; openImage?: string | null; onOpened?: () => void; refresh: () => void; go: (s: Step) => void; setGuard: (g: (() => boolean) | null) => void; header?: (extra?: ReactNode) => ReactNode; onExit?: () => void; spotOnly?: boolean; setSpotOnly?: (v: boolean) => void }) {
@@ -87,7 +88,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
       record([it.id], it.image_id);
       if (pair && syncPoint) {
         undo.current[0].ids.push(pair.id);
-        const pts = (final.boxes ?? []).map((b) => [+((b[0] + b[2]) / 2).toFixed(4), +((b[1] + b[3]) / 2).toFixed(4)]);
+        const pts = (final.boxes ?? []).map(center);
         const sp = await api.review(pair.id, "correct", reviewer, { points: pts });
         done.push({ ...pair, ...sp });
         const pid = pair.id;
@@ -153,7 +154,7 @@ export default function Review({ reviewer, datasetId, openImage, onOpened, refre
     if (!it?.teacher) return;
     if (it.skill === "point") {
       const pts = label?.points ?? [];
-      const add = (it.teacher.boxes ?? []).filter((b) => !pts.some((p) => p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3])).map((b) => [+((b[0] + b[2]) / 2).toFixed(4), +((b[1] + b[3]) / 2).toFixed(4)]);
+      const add = (it.teacher.boxes ?? []).filter((b) => !pts.some((p) => inBox(p, b))).map(center);
       if (add.length) edit({ points: [...pts, ...add] }, `補了 ${add.length} 點（預標框中心）`); else say("預標的框都已經有點了");
     } else if (it.skill === "detect") {
       const cur = label?.boxes ?? [];
@@ -311,4 +312,3 @@ function pace(times: number[], left?: number): string {
 const statusLabel: Record<Item["status"], string> = { pending: "待看", auto: "自動通過", approved: "已確認", corrected: "已修正", discarded: "丟棄" };
 const rank = (it: Item) => (it.status === "pending" && it.verdict === "fix" ? 0 : it.status === "pending" ? 1 : 2);
 const short = (t?: string) => ((t ?? "").length > 22 ? (t ?? "").slice(0, 22) + "…" : t ?? "");
-const iou = (a: number[], b: number[]) => { const w = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])), h = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1])); const i = w * h; const u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i; return u > 0 ? i / u : 0; };

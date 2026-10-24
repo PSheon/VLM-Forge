@@ -1,6 +1,6 @@
-"""The UI's workspace: images, review items and their corrections in SQLite (GOALS §6, §7).
+"""The UI's workspace: images, review items and their corrections in SQLite (GOALS §4, §5).
 
-``workspace/forge.sqlite`` plus ``workspace/images/<sha256>.<ext>`` for uploads and captures.
+``workspace/forge.sqlite`` plus ``workspace/images/<sha256>.<ext>`` for uploads.
 Held-out / release images are referenced by path, never copied. Every correction records
 the reviewer and the time; a reviewer claims an item for ``CLAIM_MINUTES`` so several people
 can work the same queue.
@@ -51,7 +51,7 @@ create table if not exists images (
     path text not null,
     width integer not null,
     height integer not null,
-    source text not null,           -- upload | capture:<nvr> | heldout | <release>
+    source text not null,           -- upload | folder:<name> | heldout
     added_at text not null
 );
 create table if not exists queues (
@@ -133,7 +133,7 @@ class Workspace:
         return self.add_image_path(path, source, sha)
 
     def add_image_path(self, path: Path, source: str, sha: str | None = None) -> dict:
-        """Register an image that stays where it is (release / capture file)."""
+        """Register an image that stays where it is (a GB300 folder or a held-out file)."""
         path = Path(path)
         sha = sha or sha256_file(path)
         with self.lock:
@@ -250,14 +250,6 @@ class Workspace:
             )
             self.db.commit()
 
-    def set_label(self, item_id: int, label: dict | None) -> None:
-        with self.lock:
-            self.db.execute(
-                "update items set label = ? where id = ?",
-                (json.dumps(label, ensure_ascii=False) if label is not None else None, item_id),
-            )
-            self.db.commit()
-
     def set_pred(self, item_id: int, pred: dict | None, pred_model: str | None) -> None:
         with self.lock:
             self.db.execute(
@@ -273,13 +265,6 @@ class Workspace:
                 (json.dumps(judge, ensure_ascii=False), judge.get("verdict"), item_id),
             )
             self.db.commit()
-
-    def unjudged(self, queue_id: int) -> list[dict]:
-        return [
-            it
-            for it in self.items(queue_id, "pending", ALL)
-            if it["pred"] is not None and not it["verdict"]
-        ]
 
     def unfinished(self, queue_id: int, image_ids: list[str]) -> dict:
         """What an interrupted autogen batch still owes: images with no questions yet,
@@ -297,28 +282,6 @@ class Workspace:
             "unpredicted": sum(it["pred"] is None for it in pend),
             "unjudged": sum(not it["verdict"] for it in pend),
         }
-
-    def triage(self, queue_id: int, seed: int = 0) -> dict:
-        """After judging: accepted items leave the human queue (status ``auto``) except a
-        random spot-check sample of max(SPOT_MIN, SPOT_FRAC) that stays ``pending`` with
-        ``spot = 1``; ``fix`` items stay pending. Items a human already touched are left alone."""
-        accepted = [it["id"] for it in self.items(queue_id, "pending") if it["verdict"] == "accept"]
-        rng = random.Random(seed)
-        rng.shuffle(accepted)
-        k = min(len(accepted), max(SPOT_MIN, round(SPOT_FRAC * len(accepted))))
-        spot, auto = accepted[:k], accepted[k:]
-        with self.lock:
-            if spot:
-                self.db.execute(
-                    f"update items set spot = 1 where id in ({','.join('?' * len(spot))})", spot
-                )
-            if auto:
-                self.db.execute(
-                    f"update items set status = 'auto' where id in ({','.join('?' * len(auto))})",
-                    auto,
-                )
-            self.db.commit()
-        return {"accepted": len(accepted), "spot": len(spot), "auto": len(auto)}
 
     def item(self, item_id: int) -> dict | None:
         row = self.db.execute(
@@ -351,21 +314,8 @@ class Workspace:
         return [self._item(r) for r in self.db.execute(q, [*args, limit])]
 
     # ------------------------------------------------------------------ per-image review
-    def image_summary(self, queue_id: int) -> list[dict]:
-        """One row per image of a queue: counts by status / verdict, for the image grid."""
-        rows = self.db.execute(
-            "select image_id, count(*) n,"
-            " sum(status = 'pending') pending, sum(status = 'auto') auto,"
-            " sum(status in ('approved', 'corrected', 'discarded')) reviewed,"
-            " sum(verdict = 'fix' and status = 'pending') fix, max(spot) spot,"
-            " min(items.id) first_id"
-            " from items where queue_id = ? group by image_id order by first_id",
-            (queue_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
     def triage_items(self, queue_id: int, seed: int = 0) -> dict:
-        """Autogen triage by question (GOALS §4: 一致→自動通過、不一致→人看): every pending
+        """Autogen triage by question (GOALS §5: 一致→自動通過、不一致→人看): every pending
         item the student and teacher agreed on gets its auto label and leaves the human
         queue (status ``auto``), except a spot sample of max(SPOT_MIN, SPOT_FRAC) accepted
         items that stays pending with ``spot = 1``; ``fix`` and uncompared items stay pending.
@@ -492,33 +442,6 @@ class Workspace:
             pass
         return out
 
-    def claim_next(self, queue_id: int, reviewer: str, after: int | None = None) -> dict | None:
-        """The next pending item nobody else holds (claims expire after CLAIM_MINUTES): the
-        judge's ``fix`` items first, then the spot-check sample, then unjudged ones."""
-        with self.lock:
-            cutoff = time.time() - CLAIM_MINUTES * 60
-            q = (
-                "select id from items where queue_id = ? and status = 'pending'"
-                " and (claimed_by is null or claimed_by = ? or claimed_at < ?)"
-            )
-            args: list = [queue_id, reviewer, cutoff]
-            if after is not None:
-                q += " and id > ?"
-                args.append(after)
-            order = (
-                " order by case when verdict = 'fix' then 0 when spot = 1 then 1 else 2 end,"
-                " id limit 1"
-            )
-            row = self.db.execute(q + order, args).fetchone()
-            if row is None:
-                return None
-            self.db.execute(
-                "update items set claimed_by = ?, claimed_at = ? where id = ?",
-                (reviewer, time.time(), row["id"]),
-            )
-            self.db.commit()
-        return self.item(row["id"])
-
     def review(self, item_id: int, action: str, reviewer: str, label: dict | None = None) -> dict:
         """approve (label = pred), correct (label given) or discard an item."""
         it = self.item(item_id)
@@ -568,29 +491,10 @@ class Workspace:
             self.db.commit()
         return self.item(item_id)
 
-    # ------------------------------------------------------------------ export
-    def reviewed_rows(self, queue_ids: list[int] | None = None) -> list[dict]:
-        """Training / eval rows (``vlmforge.data`` format): human-reviewed items (``human``)
-        and judge-accepted ones (``machine_reviewed``)."""
-        q = (
-            "select items.*, images.path, images.width, images.height, images.source"
-            " from items join images on images.id = items.image_id"
-            " where status in ('approved', 'corrected', 'auto')"
-        )
-        args: list = []
-        if queue_ids:
-            q += f" and queue_id in ({','.join('?' * len(queue_ids))})"
-            args += queue_ids
-        rows = []
-        for r in self.db.execute(q + " order by items.id", args):
-            it = self._item(r)
-            rows.append(item_row(it))
-        return rows
-
 
 def item_row(it: dict) -> dict:
     """One reviewed item -> a training / eval row. A human's verdict is ``human``; a
-    judge-accepted item nobody looked at is ``machine_reviewed`` (rules §6)."""
+    judge-accepted item nobody looked at is ``machine_reviewed`` (GOALS §4)."""
     auto = it["status"] == "auto"
     judge = it.get("judge") or {}
     base = {

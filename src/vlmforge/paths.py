@@ -31,5 +31,5 @@ DATA_CORE_VLM = Path(os.environ.get("VLMFORGE_DATA_CORE", "/home/paul/SyncAI-Dat
 RELEASES = DATA_CORE_VLM / "datasets" / "vlm-corpus" / "releases"
 HELDOUT_RELEASE = RELEASES / "syncvision-heldout-eval"
 
-# the held-out suites (GOALS §4), in the order reports list them
+# the held-out suites (GOALS §7), in the order reports list them
 HELDOUT_SUITES = ("heldout-cctv", "heldout-crowdhuman-val", "heldout-people-posture-gold")
