@@ -11,6 +11,7 @@ forge gate --base .. --adapter .. --skill multi   the pass / fail rule (GOALS §
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -33,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--adapter", type=Path, help="adapter .pt; omitted = base model")
     e.add_argument("--out", type=Path, help="report path (default: baselines/ or next to adapter)")
     e.add_argument("--batch", type=int, default=64)
+
+    k = sub.add_parser("pick", help="keep a run's best checkpoint (GOALS §6)")
+    k.add_argument("run_dir", type=Path)
+    k.add_argument("--val", type=Path, nargs="*", default=[], help="validation manifests")
 
     t = sub.add_parser("train", help="LoRA fine-tune from a YAML config")
     t.add_argument("config")
@@ -68,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
         for name, n in build_heldout(args.release, args.out).items():
             print(f"{name} {n}")
         return 0
+    if args.command == "pick":
+        from .evaluate import pick_checkpoint
+
+        r = pick_checkpoint(args.run_dir, args.run_dir.name, args.val)
+        print(json.dumps(r))
+        return
     if args.command == "eval":
         from .evaluate import evaluate, macro
 
@@ -90,8 +101,6 @@ def main(argv: list[str] | None = None) -> int:
         train_main()
         return 0
     if args.command == "gate":
-        import json
-
         from .gate import combined_macro, format_gate, gate
 
         res = gate(combined_macro(args.base), combined_macro(args.adapter), args.skill)
@@ -111,9 +120,9 @@ def main(argv: list[str] | None = None) -> int:
         from .server.engine import Engine
         from .server.workspace import Workspace
 
-        app = create_app(
-            Workspace(paths.WORKSPACE), Engine(batch_size=args.batch), paths.ROOT / "web" / "dist"
-        )
+        ws = Workspace(paths.WORKSPACE)
+        ws.start_backups()  # a copy of the database a day, 7 kept (workspace/backups)
+        app = create_app(ws, Engine(batch_size=args.batch), paths.ROOT / "web" / "dist")
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         return 0
     return 0

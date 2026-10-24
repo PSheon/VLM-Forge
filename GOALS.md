@@ -50,11 +50,12 @@ Data Core 匯出包、GCS、`stage` 分支與 gate 儀式、PRO 6000 kestrel par
 ## 6. 訓練
 
 - UI 一顆按鈕；只露名稱、步數、學習率。預設 r=16、alpha=32、lr 2e-4、步數依資料量（≈ 每張圖 2 步，100–1000）、batch 8、replay 0.5、region head 關。預設值由 Claude 依實驗調整，不逐項問。選到的資料集驗證集沒有確認題時，從訓練圖再切約 10%（≥ 5 張）當驗證。
+- 每 1/4 步數存一個檢查點，訓完用資料集驗證集的分數挑最好的一個當這次的模型（沒有驗證題時看驗證 loss，再沒有就用最後一步）——資料少時最後一步常已過擬合。
 - 訓完自動在 held-out 與驗證集評估、和 base 比；過關＝**工廠 CCTV 考卷**每個 skill ≥ base − 1 點且至少一個進步（CrowdHuman／機器狗只當參考，不算進去）；一次只跑一個訓練。
 
 ## 7. 測試
 
-- **分數在 GB300 算**（③ 測試頁）：CCTV held-out（105 張／210 題，真考卷）＋每個資料集的驗證集；CrowdHuman 與機器狗 gold 只當參考。指標：detect／point F1 macro、query exact（數字、是非）、count MAE；顯示 base vs 新模型與差值，逐題看差異，單張試玩。
+- **分數在 GB300 算**（③ 測試頁）：CCTV held-out（105 張／210 題，真考卷）＋每個資料集的驗證集；CrowdHuman 與機器狗 gold 只當參考。指標：detect／point F1 macro、query exact（數字、是非）、count MAE；顯示 base vs 新模型與差值（skill 層級，可展開到每個物件／問題並附題數），逐題看差異，單張試玩。
 - **Orin 只跑延遲腳本**：同一組圖，base vs adapter，每題毫秒；不重算分數。
 - ③ 提供「匯出到 Orin」：adapter 檔＋載入範例。
 
@@ -75,6 +76,7 @@ Data Core 匯出包、GCS、`stage` 分支與 gate 儀式、PRO 6000 kestrel par
 ## 10. 現況（2026-10-24）
 
 - ①→③ 全程在 UI 跑通（工廠-測試 120 張 → 2845 題 → 檢查 → 訓練 → 分數／看差異／試一張／Orin 包）；版本內容見 `CHANGELOG.md`。
+- 資料庫每天自動備份一份到 `workspace/backups/`（留 7 份；圖檔不在備份裡）。
 - 標註批次的進度只在記憶體：server 重啟或取消會中斷，但出好的題都在，資料集頁給「接著跑」。**跑標註或訓練時不要重啟 server。**
 - 下一步：Paul 看完 ≥ 30 題抽查 → 用確認過的題訓第一個正式 run，看 CCTV detect／query 是否 ≥ base（v1 完成點）；Orin 實機驗證 `local_adapter.py`。
 - 待 Paul：NVR RTSP 連線資訊（工廠 CCTV 新畫面）。

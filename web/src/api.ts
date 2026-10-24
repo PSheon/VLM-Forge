@@ -104,7 +104,10 @@ export interface Dataset {
 /** What an upload / folder added; ``skipped`` = already in the dataset or the same frame again. */
 export interface Added { added: number; skipped: number; image_ids: string[] }
 
-export interface GridCell { image_id: string; split: "train" | "val"; n: number; pending: number; fix: number; auto: number; kept: number }
+/** One object / question of a suite: base vs each finished run (③ 按物件). */
+export interface ObjectRow { skill: Skill; object: string; n: number; base: number; runs: Record<string, number | null> }
+
+export interface GridCell { image_id: string; split: "train" | "val"; n: number; pending: number; fix: number; auto: number; kept: number; spot: number }
 
 export interface Summary {
   images: number; items: number; images_pending: number; images_fix: number;
@@ -128,6 +131,8 @@ export interface Run {
   datasets?: string[];
   evals: Record<string, Record<string, number>>;
   gate: { passed: boolean; skills: GateRow[] } | null;
+  /** which saved step became the adapter (evaluate.pick_checkpoint) */
+  checkpoints?: { steps: number[]; scores: Record<string, number>; by: "val" | "val_loss" | "last"; best: number | null } | null;
   error: string | null;
   log_tail?: string[];
   curve: { step: number; loss?: number; val?: number }[];
@@ -141,7 +146,7 @@ export interface EngineStatus {
   current: string; pending: number; busy: boolean; gpu_mem_gb: number | null; gpu_free_gb?: number | null; last_error: string | null;
 }
 export interface Model { name: string; label: string }
-export interface Status { version: string; engine: EngineStatus; models: Model[] }
+export interface Status { version: string; engine: EngineStatus; models: Model[]; backup?: { file: string; at: string; count: number } | null }
 
 export interface HeldoutPair {
   row: Record<string, unknown> & { skill: Skill; object?: string; question?: string; boxes?: number[][]; points?: number[][]; answer?: string };
@@ -198,6 +203,7 @@ export const api = {
   deleteRun: (name: string) => j<{ ok: true }>(del(`/api/train/${name}`)),
   orinUrl: (name: string) => `/api/train/${name}/orin.zip`,
   // ④ test
+  testObjects: (suite: string) => j<{ suite: string; rows: ObjectRow[] }>(fetch(`/api/test/objects?suite=${encodeURIComponent(suite)}`)),
   testSummary: () => j<{ suites: string[]; base: Record<string, Record<string, number>>; runs: Run[] }>(fetch("/api/test/summary")),
   heldoutDiff: (base: string, adapter: string, onlyChanged = true) =>
     j<{ manifest: string; n: number; items: HeldoutPair[] }>(fetch(`/api/heldout/diff?base=${encodeURIComponent(base)}&adapter=${encodeURIComponent(adapter)}&only_changed=${onlyChanged}`)),
@@ -242,7 +248,7 @@ export function judgeText(v: JudgeVerdict | null | undefined): string {
 export const suiteLabel = (s: string) =>
   s === "heldout-cctv" ? "工廠 CCTV（真考卷）" : s === "heldout-crowdhuman-val" ? "CrowdHuman（參考）" : s === "heldout-people-posture-gold" ? "機器狗 gold（參考）" : s.startsWith("val-") ? `${s.slice(4)} 驗證集` : s;
 export const phaseLabel = (p?: string) =>
-  p === "generating" ? "出題中" : p === "predicting" ? "模型作答中" : p === "judging" ? "比對中" : p?.startsWith("eval:") ? `評估 ${suiteLabel(p.slice(5))}` : p === "training" ? "訓練中" : p === "cancelled" ? "已取消" : p ?? "";
+  p === "generating" ? "出題中" : p === "predicting" ? "模型作答中" : p === "judging" ? "比對中" : p?.startsWith("eval:") ? `評估 ${suiteLabel(p.slice(5))}` : p === "training" ? "訓練中" : p === "pick" ? "挑最佳檢查點" : p === "cancelled" ? "已取消" : p ?? "";
 export const itemTitle = (it: { skill: Skill; prompt: string }) => (it.skill === "query" ? it.prompt : it.skill === "caption" ? `寫一段描述（${it.prompt}）` : `${skillLabel[it.skill]}：${it.prompt}`);
 
 /** Mirrors vlmforge.autogen.parse_fixed so the textarea can validate as you type. */

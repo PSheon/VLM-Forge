@@ -200,3 +200,53 @@ def evaluate(manifest: Path, out: Path, adapter: Path | None = None, batch: int 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(res, indent=1))
     return res
+
+
+# ------------------------------------------------------------------ picking a checkpoint
+def pick_checkpoint(run_dir: Path, name: str, manifests: list[Path], batch: int = 32) -> dict:
+    """Small datasets overfit, so the last step is not always the best one (GOALS §6). Score
+    every ``ckpt-<step>.pt`` of a run on the datasets' validation splits with one model load
+    (mean of the skills' macro scores), keep the best as ``<name>.pt`` and delete the rest.
+    Without validation rows the lowest ``val/loss`` in ``log.jsonl`` decides; without that,
+    the last step. Writes and returns ``checkpoints.json``."""
+    import shutil
+
+    ckpts = sorted(run_dir.glob("ckpt-*.pt"), key=lambda p: int(p.stem.split("-")[1]))
+    steps = [int(p.stem.split("-")[1]) for p in ckpts]
+    out: dict = {"steps": steps, "scores": {}, "by": "last", "best": steps[-1] if steps else None}
+    manifests = [m for m in manifests if m.exists()]
+    if len(ckpts) > 1 and manifests:
+        import torch
+
+        from . import paths
+        from .model import Moondream, load_adapter
+
+        rows = [json.loads(line) for m in manifests for line in open(m)]
+        model = Moondream(paths.WEIGHTS, paths.TOKENIZER, batch_size=batch)
+        base_head = {k: v.clone() for k, v in model.region.head_state_dict().items()}
+        with torch.no_grad():
+            for step, ck in zip(steps, ckpts, strict=True):
+                a = load_adapter(ck, model.device)
+                model.lora = a["lora"]
+                model.region.load_head(a["region_head"] or base_head)
+                m = macro(score(rows, predict_rows(model, rows))["metrics"])
+                out["scores"][str(step)] = round(sum(m.values()) / len(m), 4) if m else 0.0
+                print(f"checkpoint {step}: {out['scores'][str(step)]}", flush=True)
+        out["by"] = "val"
+        out["best"] = max(steps, key=lambda s: (out["scores"][str(s)], s))  # tie → later
+    elif len(ckpts) > 1 and (run_dir / "log.jsonl").exists():
+        val = {}
+        for line in open(run_dir / "log.jsonl"):
+            rec = json.loads(line)
+            if "val/loss" in rec and rec["step"] in steps:
+                val[rec["step"]] = rec["val/loss"]
+        if val:
+            out["scores"] = {str(k): round(v, 4) for k, v in val.items()}
+            out["by"] = "val_loss"
+            out["best"] = min(val, key=lambda s: (val[s], -s))
+    if out["best"] is not None:
+        shutil.copyfile(run_dir / f"ckpt-{out['best']}.pt", run_dir / f"{name}.pt")
+        for ck in ckpts:
+            ck.unlink()
+    (run_dir / "checkpoints.json").write_text(json.dumps(out, indent=1))
+    return out

@@ -3,7 +3,7 @@
 // action column. Same pattern as the dataset page: no tab bar, ← / Esc goes back.
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { api, defaultPrompt, emptyLabel, fmt, fmtDelta, phaseLabel, skillLabel, suiteLabel, summary, type Dataset, type HeldoutPair, type ImageRow, type Model, type Pred, type Run, type Skill } from "../api";
+import { api, defaultPrompt, emptyLabel, fmt, fmtDelta, phaseLabel, skillLabel, suiteLabel, summary, type Dataset, type HeldoutPair, type ImageRow, type Model, type Pred, type Run, type Skill, type ObjectRow } from "../api";
 import Canvas, { type View } from "../components/Canvas";
 import ImagePicker from "../components/ImagePicker";
 import TextDiff from "../components/TextDiff";
@@ -42,13 +42,19 @@ const suiteKind = (s: string): ["target" | "val" | "ref", string] => (s === "hel
 function Scores({ header, data, done, running, suites, go, onDiff, onPlay }: { header: ReactNode; data: { base: Record<string, Record<string, number>> }; done: Run[]; running?: Run; suites: string[]; go: (s: Step) => void; onDiff: (run: string, suite: string) => void; onPlay: () => void }) {
   const best = done[0];
   const [orin, setOrin] = useState(false);
+  const [byObj, setByObj] = useState<Record<string, ObjectRow[] | null>>({}); // suite → rows (null = loading)
+  const toggleObj = (s: string) => {
+    if (s in byObj) { const next = { ...byObj }; delete next[s]; setByObj(next); return; }
+    setByObj({ ...byObj, [s]: null });
+    api.testObjects(s).then((r) => setByObj((cur) => (s in cur ? { ...cur, [s]: r.rows } : cur))).catch(() => setByObj((cur) => { const n = { ...cur }; delete n[s]; return n; }));
+  };
   const suiteCard = (s: string) => {
             const [kind, why] = suiteKind(s);
             const skills = SKILLS.filter((k) => data.base[s]?.[k] !== undefined || done.some((r) => r.evals[s]?.[k] !== undefined));
             if (!skills.length) return null;
             return (
               <div key={s} className={`panel col suite ${kind}`}>
-                <div className="row"><h3>{suiteLabel(s)}</h3><Pill kind={kind === "target" ? "warn" : "grey"}>{why}</Pill></div>
+                <div className="row"><h3>{suiteLabel(s)}</h3><Pill kind={kind === "target" ? "warn" : "grey"}>{why}</Pill><button className={`ghost small${s in byObj ? " cur" : ""}`} style={{ marginLeft: "auto" }} onClick={() => toggleObj(s)} title="每個物件／問題各自的分數">按物件 {s in byObj ? "▴" : "▾"}</button></div>
                 <div className="tw"><table className="score">
                   <thead><tr><th>skill</th><th className="num">base</th>{done.map((r) => <th key={r.name} className="num"><div className="col" style={{ gap: 2, alignItems: "flex-end" }}><span>{r.name}</span><span className="row" style={{ gap: 6 }}>{r.gate && kind === "target" && <Pill kind={r.gate.passed ? "ok" : "bad"}>{r.gate.passed ? "過關" : "沒過"}</Pill>}<button className="ghost small" onClick={() => onDiff(r.name, s)} title="逐題看 base 和這個模型在這張考卷的差別">看差異 →</button></span></div></th>)}</tr></thead>
                   <tbody>
@@ -65,6 +71,21 @@ function Scores({ header, data, done, running, suites, go, onDiff, onPlay }: { h
                     ))}
                   </tbody>
                 </table></div>
+                {s in byObj && (byObj[s] === null ? <div className="skel" style={{ height: 60 }} /> : (
+                  <div className="tw" style={{ maxHeight: 360, overflow: "auto" }}><table className="score">
+                    <thead><tr><th>物件／問題</th><th className="num" title="這張考卷有幾題">題數</th><th className="num">base</th>{done.map((r) => <th key={r.name} className="num">{r.name}</th>)}</tr></thead>
+                    <tbody>
+                      {byObj[s]!.map((o) => (
+                        <tr key={o.skill + o.object} className={o.n < 5 ? "muted" : ""} title={o.n < 5 ? "題數少，分數只供參考" : undefined}>
+                          <td><span className="muted small">{skillLabel[o.skill]}</span> {o.object}</td>
+                          <td className="num">{o.n || "—"}</td>
+                          <td className="num">{fmt(o.base)}</td>
+                          {done.map((r) => { const v = o.runs[r.name]; const d = v != null ? v - o.base : undefined; return <td key={r.name} className="num">{v == null ? <span className="muted">—</span> : <span className="row" style={{ justifyContent: "flex-end", gap: 6 }}><span>{fmt(v)}</span>{d !== undefined && <Pill kind={d > 0.0005 ? "ok" : d < -0.0005 ? "bad" : "grey"}>{fmtDelta(d)}</Pill>}</span>}</td>; })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table></div>
+                ))}
               </div>
             );
           };

@@ -121,3 +121,30 @@ def test_region_head_roundtrip_without_weights():
             )
         ),
     )
+
+
+def test_pick_checkpoint_without_val_rows_uses_val_loss(tmp_path):
+    """No validation manifests: the lowest val/loss among the saved steps wins, the winner
+    becomes <name>.pt and the other checkpoints are deleted; no val curve → the last step."""
+    import json
+
+    from vlmforge.evaluate import pick_checkpoint
+
+    run = tmp_path / "ft-x"
+    run.mkdir()
+    for s in (50, 100, 150):
+        (run / f"ckpt-{s}.pt").write_bytes(f"step {s}".encode())
+    log = [{"step": 50, "val/loss": 1.2}, {"step": 100, "val/loss": 0.9}, {"step": 120, "loss": 1}]
+    log.append({"step": 150, "val/loss": 1.1})
+    (run / "log.jsonl").write_text("\n".join(json.dumps(r) for r in log))
+    r = pick_checkpoint(run, "ft-x", [tmp_path / "missing.jsonl"])
+    assert r["by"] == "val_loss" and r["best"] == 100
+    assert (run / "ft-x.pt").read_bytes() == b"step 100" and not list(run.glob("ckpt-*"))
+    assert json.loads((run / "checkpoints.json").read_text())["best"] == 100
+
+    run2 = tmp_path / "ft-y"
+    run2.mkdir()
+    for s in (50, 100):
+        (run2 / f"ckpt-{s}.pt").write_bytes(f"step {s}".encode())
+    assert pick_checkpoint(run2, "ft-y", [])["by"] == "last"
+    assert (run2 / "ft-y.pt").read_bytes() == b"step 100"

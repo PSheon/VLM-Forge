@@ -105,6 +105,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [full, setFull] = useState<Dataset | null>(null);
   const [grid, setGrid] = useState<GridCell[] | null>(null);
   const [dups, setDups] = useState<string[]>([]);
+  const [show, setShow] = useState<GridFilter>("all");
   const [every, setEvery] = useState(5); // seconds between frames taken from a video
   const [dir, setDir] = useState("");
   const [busy, setBusy] = useState(false);
@@ -165,8 +166,9 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const doRename = async () => { try { await api.updateDataset(d.id, { name: newName.trim() }); setRename(false); say("改好了"); reload(); } catch (e) { say(String(e), "bad"); } };
   // multi-select on the grid: the checkbox (or any thumb once something is picked) toggles,
   // Shift extends from the last pick; the removal itself lives in the action column
+  const visible = (grid ?? []).filter(GRID_FILTERS[show].test);
   const togglePick = (id: string, shift: boolean) => {
-    const ids = (grid ?? []).map((g) => g.image_id);
+    const ids = visible.map((g) => g.image_id); // Shift ranges follow what is on screen
     const a = shift && lastPick.current ? ids.indexOf(lastPick.current) : -1, b = ids.indexOf(id); // read the ref now, not inside the updater
     setPicked((cur) => {
       const next = new Set(cur);
@@ -251,7 +253,8 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
             </div>
             <div className="small muted row">{picked.size ? `已選 ${picked.size} 張 · 點縮圖加選或取消 · Shift 連選 · Esc 取消選取` : grid?.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查 · 左上角 ☐ 多選` : grid === null ? "載入中…" : "還沒有圖"}{!picked.size && dups.length > 0 && <button className="ghost warn-text" onClick={() => setPicked(new Set(dups))} title="和更早加入的某張幾乎一模一樣（畫面裡沒有東西移動）">有 {dups.length} 張幾乎重複 → 選取</button>}</div>
             {grid === null && (full ?? d).images > 0 && <div className="thumbs" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))" }}>{Array.from({ length: Math.min(30, (full ?? d).images) }, (_, i) => <div key={i} className="skel" style={{ aspectRatio: "4/3", borderRadius: 4 }} />)}</div>}
-            <Grid cells={grid ?? []} picked={picked} onPick={togglePick} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
+            {!!grid?.length && <div className="row chips" role="group" aria-label="篩選">{(Object.keys(GRID_FILTERS) as GridFilter[]).map((k) => { const c = k === "all" ? grid.length : grid.filter(GRID_FILTERS[k].test).length; return (k === "all" || c > 0) && <button key={k} className={`chip-btn${show === k ? " cur" : ""}`} onClick={() => setShow(k)}>{GRID_FILTERS[k].label} <span className="muted">{c}</span></button>; })}</div>}
+            <Grid cells={visible} picked={picked} onPick={togglePick} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
           <div className="actions">
             <ActionsHead />
@@ -264,7 +267,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
               {cta && !cta.text.startsWith("去檢查") && pendingImgs > 0 && !running && <button className="ghost" onClick={() => setTab("review")}>去檢查（{pendingImgs} 張）→</button>}
             </div>
             <Pop show={picked.size > 0} className="panel col">
-              <div className="row" style={{ justifyContent: "space-between" }}><b>已選 {picked.size} 張</b><span className="row"><button className="ghost" onClick={() => setPicked(new Set((grid ?? []).map((g) => g.image_id)))}>全選</button><button className="ghost" onClick={() => setPicked(new Set())}>取消選取</button></span></div>
+              <div className="row" style={{ justifyContent: "space-between" }}><b>已選 {picked.size} 張</b><span className="row"><button className="ghost" onClick={() => setPicked(new Set(visible.map((g) => g.image_id)))} title={show === "all" ? "" : `只選目前篩選的 ${visible.length} 張`}>全選{show === "all" ? "" : `（${GRID_FILTERS[show].label}）`}</button><button className="ghost" onClick={() => setPicked(new Set())}>取消選取</button></span></div>
               <div className="small muted">{pickedQ ? `${pickedQ} 題，其中 ${pickedDone} 題已確認或自動通過` : "還沒標註"}</div>
               {running ? <div className="hint warn-text">標註中，跑完或取消後才能重新標註或移除</div> : (
                 <div className="row" style={{ justifyContent: "space-between" }}>
@@ -363,6 +366,17 @@ function BatchCard({ b, onCancel, onResume, busy, skippedNote }: { b: Batch; onC
   );
 }
 
+// the grid's filter chips (a count each; empty ones are hidden)
+type GridFilter = "all" | "fix" | "pending" | "spot" | "done" | "unlabelled" | "val";
+const GRID_FILTERS: Record<GridFilter, { label: string; test: (g: GridCell) => boolean }> = {
+  all: { label: "全部", test: () => true },
+  fix: { label: "有不一致", test: (g) => (g.fix ?? 0) > 0 },
+  pending: { label: "待看", test: (g) => (g.pending ?? 0) > 0 },
+  spot: { label: "抽查", test: (g) => (g.spot ?? 0) > 0 },
+  done: { label: "看完", test: (g) => g.n > 0 && !g.pending },
+  unlabelled: { label: "沒標", test: (g) => g.n === 0 },
+  val: { label: "驗證集", test: (g) => g.split === "val" },
+};
 const isVideo = (name: string) => /\.(mp4|mov|avi|mkv|m4v|ts|webm|gif)$/i.test(name);
 const addedText = (added: number, skipped: number) => `加入 ${added} 張${skipped ? `（略過 ${skipped} 張：已經有或幾乎一樣）` : ""}`;
 

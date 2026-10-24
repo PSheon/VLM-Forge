@@ -211,3 +211,19 @@ def test_retriage_keeps_the_spot_sample(tmp_path, monkeypatch):
     ws.review(sid, "correct", "P", {"boxes": []})
     back = ws.reopen(sid)
     assert back["status"] == "pending" and back["label"] == auto and back["reviewer"] is None
+
+
+def test_daily_backup_keeps_the_newest(tmp_path):
+    ws = Workspace(tmp_path / "ws")
+    ws.add_image_bytes(png_bytes("red"), ext="png")
+    d = tmp_path / "ws" / "backups"
+    d.mkdir()
+    for day in ("20261001", "20261002", "20261003"):
+        (d / f"forge-{day}.sqlite").write_bytes(b"old")
+    dest = ws.backup(keep=2)
+    import sqlite3
+
+    assert sqlite3.connect(dest).execute("select count(*) from images").fetchone()[0] == 1
+    assert sorted(p.name for p in d.glob("forge-*.sqlite")) == ["forge-20261003.sqlite", dest.name]
+    assert ws.backup(keep=2) == dest  # once a day
+    assert ws.latest_backup()["file"] == str(dest)

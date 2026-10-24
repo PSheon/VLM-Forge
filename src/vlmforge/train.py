@@ -20,7 +20,8 @@ The pool is generated once and cached next to the run.
 Every training row whose image appears in a held-out manifest (``data.exclude``) is dropped.
 
 Outputs in ``runs/<name>/``: ``<name>.pt`` (adapter: ``lora_state_dict``, ``rank``, ``alpha``,
-``region_head``), ``<name>.json`` (metadata), ``log.jsonl``, ``replay.json`` and, while
+``region_head``), ``ckpt-<step>.pt`` at every save (``evaluate.pick_checkpoint`` keeps the best
+as ``<name>.pt``), ``<name>.json`` (metadata), ``log.jsonl``, ``replay.json`` and, while
 running, ``resume.pt`` (a restart with the same config resumes from it).
 """
 
@@ -493,6 +494,7 @@ def train(cfg_path: str) -> None:
             print(f"eval {step} {ev}", flush=True)
         if step % cfg.get("save_every", 500) == 0 or step == o["steps"]:
             save_adapter(lora, head, out / f"{name}.pt")
+            save_adapter(lora, head, out / f"ckpt-{step}.pt")  # candidates for pick_checkpoint
             torch.save(
                 {
                     "lora": lora.state_dict(),

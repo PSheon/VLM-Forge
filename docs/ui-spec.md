@@ -28,7 +28,7 @@
 | 載入 | 首次載入顯示灰色骨架（資料集清單、縮圖格、訓練卡、分數卡），不閃空狀態 |
 | 畫布 | 縮放／適應／圖例浮在圖片左上與右上角，不佔一列 |
 | 步驟列 | 三步各一行小字，只放一個狀態（有事要做＝琥珀點＋「119 張待看」、做完＝✓、訓練「1381 筆可訓」、測試「N 個模型可比」）；數字細節在各頁標題列 |
-| 系統 | 頂列右側一顆「系統」pill：正常灰點、GPU 工作中綠點閃、GPU 被佔／用 8B 琥珀、缺權重／出題模型／錯誤紅；點開看 GPU、權重、出題模型、上次錯誤（知道了），點外面或 Esc 關 |
+| 系統 | 頂列右側一顆「系統」pill（點開另有「備份」一行：最近一次時間與份數）：正常灰點、GPU 工作中綠點閃、GPU 被佔／用 8B 琥珀、缺權重／出題模型／錯誤紅；點開看 GPU、權重、出題模型、上次錯誤（知道了），點外面或 Esc 關 |
 | 名字 | 右上虛線框，點開 dialog 改；每筆確認記名字 |
 | 斷線 | 紅 pill「連不到 server」，每 5 秒重試，畫面不清空 |
 | `?` | 當前畫面的快捷鍵說明（按鈕在每頁動作欄頂列右側） |
@@ -41,6 +41,7 @@
 
 - 清單＝列表列：前 4 張縮圖、名稱＋狀態 pill（標註中 n/m、還有 N 張要看、全部確認、N 張還沒標、沒有圖、上次標註失敗、標註中斷）、模式與更新時間、看過比例進度條、圖／題／已確認／驗證、›；1280 以下藏數字。
 - 新資料集 dialog：名稱必填且不重複（即時檢查）、備註。
+- 縮圖格上方一列篩選 chip（全部／有不一致／待看／抽查／看完／沒標／驗證集，各帶張數，0 張的不顯示）；「全選」與 Shift 連選只作用在目前篩選出來的圖。
 - 詳情頁左欄＝圖片格：拖曳區（多張、zip、影片／GIF，下方一行「影片每 [1/2/5/10/30/60] 秒抽一張」）、資料夾路徑（圖片與影片；不存在／含 held-out 拒絕）、縮圖角標（val／不一致數／✓）。加圖 toast 寫「加入 N 張（略過 K 張：已經有或幾乎一樣）」；格子上方提示列有重複圖時多一個「有 K 張幾乎重複 → 選取」，選起來就能移除。點縮圖或「去檢查」進檢查，「← 全部圖片」或 Esc 回來。
 - 移除圖：縮圖左上角 ☐（hover 才出現）勾選；選了任一張後點縮圖＝加選／取消，Shift 連選，Esc 取消選取。動作欄主按鈕下出現「已選 N 張」卡（全選、取消選取、N 題其中幾題已確認、「重新標註 N 張…」、「從資料集移除…」，Delete＝移除）；確認 dialog 寫明會換掉／刪掉的題數。重新標註用目前的 AI 導師設定（dialog 列出模式與每張圖都問的物件），標註被擋時按鈕灰掉並寫原因。連同這些圖在此資料集的題一起刪；上傳的原檔沒有別的資料集在用才刪，GB300 資料夾的原檔不動；標註中不能移除。
 - 右欄依第 1 節順序：主按鈕（下一步）→ 批次卡 → 「AI 導師可信度」卡 → 「AI 導師設定」區塊 → 「匯出」區塊 → 底部建立時間與刪除（輸入名稱確認）。
@@ -85,12 +86,12 @@
 - 右欄：主按鈕「開始訓練 名稱」，下面是「這次會訓練」摘要（資料集、筆數／張數、步數與預估時間、會用哪些考卷評分、skill 長條），再下面紅字擋／黃字提醒。
 - 名稱自動 ft-MMDD-HHMM；步數、學習率、rank 的預設見 GOALS §6；進階：rank、region head（開了 Orin 載不了）。摘要寫明驗證從哪來（資料集驗證集或從訓練圖切出），沒有時黃字。
 - 開始前紅字擋住：0 筆、名稱重複、權重缺、另一個訓練在跑；黃字不擋：有圖沒看、某 skill < 20 筆、region head。
-- 執行中：階段、步數進度、ETA、VRAM、loss 曲線（train 實線、val 虛線＋評估點）、取消；完成：核對表 指標｜base｜新｜Δ｜PASS/FAIL；失敗：最後 20 行 log；歷史可刪。
+- 執行中：階段（訓練中 → 挑最佳檢查點 → 評估各考卷）、步數進度、ETA、VRAM、loss 曲線（train 實線、val 虛線＋評估點；完成後綠色虛線標「採用」的步數）、取消；完成卡寫「用第 N 步的模型（驗證集分數最高 x；共 K 個檢查點：…）」；完成：核對表 指標｜base｜新｜Δ｜PASS/FAIL；失敗：最後 20 行 log；歷史可刪。
 
 ## 6. ③ 測試
 
 - 頁首：狀態 pill（訓練中 N/M 步／N 個模型可比／還沒有模型）；沒有模型時「下一步」卡（訓練中→完成後多一欄；否則→去訓練）。
-- 分數：工廠 CCTV（v1 目標考卷）一張全寬主卡在上，驗證集與參考考卷縮成下面一列小卡；卡內小表 skill × [base, 每個 run]；run 欄頭掛過關／沒過與一個「看差異 →」（看差異以模型×考卷為單位）；格＝分數＋Δ pill（綠紅灰）；白話註解（F1／答對率、v1 目標）。
+- 分數：工廠 CCTV（v1 目標考卷）一張全寬主卡在上，驗證集與參考考卷縮成下面一列小卡；卡內小表 skill × [base, 每個 run]；卡右上「按物件 ▾」展開第二張表：每個物件／問題一列（skill 小字、題數、base、每個 run＋Δ），題數 < 5 的列灰字（只供參考）；run 欄頭掛過關／沒過與一個「看差異 →」（看差異以模型×考卷為單位）；格＝分數＋Δ pill（綠紅灰）；白話註解（F1／答對率、v1 目標）。
 - 看差異：run／考卷／篩選（只看變化／變好／變差／全部）；空間題並排兩張疊圖（正解虛線），**兩張同步縮放與拖動**；文字題三行＋diff；←/→ 換題；試一張的並排圖同樣同步。
 - 試一張：進頁自動選最近一張圖；四個 skill；巡檢快問 chips（值班／安全帽／背心／出口／地面／堆高機數、detect person/forklift/helmet…）；Enter 執行；結果列 pill「base · 3 框 · 420 ms」「新模型 · …」；可「存成資料集的題」。
 - 分數是主畫面；看差異、試一張是子畫面（← 分數／Esc 回來）。
@@ -128,7 +129,7 @@
 | ① 資料集 | `GET/POST /api/datasets`、`GET/POST/DELETE /api/datasets/{id}`、`GET …/grid`、`POST …/upload`、`POST …/folder`、`POST …/images/remove`、`GET …/duplicates`、`POST …/relabel`、`POST …/label`、`POST …/export`、`GET …/download/{jsonl|zip}`、`POST /api/queues/{qid}/cancel`、`POST /api/queues/{qid}/resume` |
 | 檢查 | `GET /api/review/next-image`、`GET /api/review/images`、`GET /api/review/image/{image_id}`、`POST /api/review/image`、`POST /api/items/{id}/review`、`POST /api/items/{id}/reopen`、`POST /api/datasets/{id}/items`（加一題） |
 | ② 訓練 | `GET/POST /api/train`、`POST /api/train/{name}/cancel`、`DELETE /api/train/{name}` |
-| ③ 測試 | `GET /api/test/summary`、`GET /api/heldout/diff`、`GET/POST /api/images`、`GET /api/sources`、`POST /api/compare`、`POST /api/datasets/{id}/items`、`GET /api/train/{name}/orin.zip` |
+| ③ 測試 | `GET /api/test/summary`、`GET /api/test/objects`、`GET /api/heldout/diff`、`GET/POST /api/images`、`GET /api/sources`、`POST /api/compare`、`POST /api/datasets/{id}/items`、`GET /api/train/{name}/orin.zip` |
 
 ## 11. 驗收
 

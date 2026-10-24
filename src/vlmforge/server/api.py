@@ -138,6 +138,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             "engine": engine.status(),
             "jobs": jobs,
             "models": list_models(),
+            "backup": ws.latest_backup(),
         }
 
     @app.post("/api/status/clear-error")
@@ -629,6 +630,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             " sum(items.status = 'pending') pending,"
             " sum(items.verdict = 'fix' and items.status = 'pending') fix,"
             " sum(items.status = 'auto') auto,"
+            " sum(items.spot = 1 and items.status = 'pending') spot,"
             " sum(items.status in ('approved', 'corrected', 'discarded')"
             " or items.origin = 'workbench') kept"  # what 重新標註 leaves alone
             " from dataset_images di"
@@ -715,6 +717,50 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                 m = json.loads(p.read_text())["metrics"]
                 base[s] = {k.split("/")[0]: v for k, v in m.items() if k.endswith("/macro")}
         return {"suites": list(paths.HELDOUT_SUITES), "base": base, "runs": pipeline.list()}
+
+    @app.get("/api/test/objects")
+    def test_objects(suite: str):
+        """One suite broken down by object / question: base vs every finished run, with how
+        many questions each row has (a score over 3 questions is noise)."""
+        base_p = paths.BASELINES / f"base-{suite}.json"
+        if not base_p.exists():
+            raise HTTPException(404, "這張考卷還沒有 base 分數")
+        base = json.loads(base_p.read_text())
+
+        def per_object(metrics: dict) -> dict[str, float]:
+            out = {}
+            for k, v in metrics.items():
+                key, _, _metric = k.rpartition("/")
+                skill, _, what = key.partition(":")
+                if what and "@" not in skill:  # skill:object, not the per-source copies
+                    out[f"{skill}:{what}"] = v
+            return out
+
+        n: dict[str, int] = {}
+        manifest = Path(base.get("manifest", ""))
+        if manifest.exists():
+            for line in open(manifest):
+                r = json.loads(line)
+                k = f"{r['skill']}:{r.get('object') or r.get('question') or r.get('length', '')}"
+                n[k] = n.get(k, 0) + 1
+        runs = {}
+        for r in pipeline.list():
+            rep = paths.RUNS / r["name"] / f"eval-{r['name']}-{suite}.json"
+            if r.get("state") == "done" and rep.exists():
+                runs[r["name"]] = per_object(json.loads(rep.read_text())["metrics"])
+        rows = [
+            {
+                "skill": k.split(":", 1)[0],
+                "object": k.split(":", 1)[1],
+                "n": n.get(k, 0),
+                "base": v,
+                "runs": {name: m.get(k) for name, m in runs.items()},
+            }
+            for k, v in per_object(base["metrics"]).items()
+        ]
+        order = {s: i for i, s in enumerate(SKILLS)}
+        rows.sort(key=lambda x: (order.get(x["skill"], 9), -x["n"], x["object"]))
+        return {"suite": suite, "rows": rows}
 
     @app.get("/api/queues/{qid}")
     def queue(qid: int):

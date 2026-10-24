@@ -422,3 +422,40 @@ def test_video_and_gif_become_frames(client, tmp_path):
     ).json()
     assert g["added"] == 3 and g["skipped"] == 1  # the second red frame repeats the first
     assert not list((client.tmp / "workspace" / "tmp").glob("*"))  # the upload is cleaned up
+
+
+def test_scores_by_object(client):
+    """③'s 按物件 table: per-object rows from the base report and each finished run, with the
+    number of questions behind each."""
+    import json as _j
+
+    from vlmforge import paths
+
+    man = client.tmp / "heldout-x.jsonl"
+    rows = [{"skill": "detect", "object": "person", "image": "a"}] * 3
+    rows += [{"skill": "query", "question": "Is the door open?", "image": "b"}]
+    man.write_text("\n".join(_j.dumps(r) for r in rows))
+    paths.BASELINES.mkdir(parents=True, exist_ok=True)
+    metrics = {"detect/macro": 0.4, "detect:person/f1": 0.1, "detect@cctv:person/f1": 0.1}
+    metrics["query:Is the door open?/exact"] = 0.5
+    (paths.BASELINES / "base-heldout-x.json").write_text(
+        _j.dumps({"metrics": metrics, "manifest": str(man)})
+    )
+    run = paths.RUNS / "ft-a"
+    run.mkdir(parents=True)
+    (run / "pipeline.json").write_text(_j.dumps({"name": "ft-a", "state": "done", "evals": {}}))
+    (run / "eval-ft-a-heldout-x.json").write_text(
+        _j.dumps({"metrics": {"detect:person/f1": 0.6, "query:Is the door open?/exact": 1.0}})
+    )
+    r = client.get("/api/test/objects", params={"suite": "heldout-x"}).json()["rows"]
+    assert r == [
+        {"skill": "detect", "object": "person", "n": 3, "base": 0.1, "runs": {"ft-a": 0.6}},
+        {
+            "skill": "query",
+            "object": "Is the door open?",
+            "n": 1,
+            "base": 0.5,
+            "runs": {"ft-a": 1.0},
+        },
+    ]
+    assert client.get("/api/test/objects", params={"suite": "nope"}).status_code == 404

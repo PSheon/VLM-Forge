@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import sqlite3
 import threading
@@ -32,6 +33,7 @@ CLAIM_MINUTES = 10
 SKILLS = ("detect", "point", "query", "caption")
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 STATUSES = ("pending", "auto", "approved", "corrected", "discarded")
+BACKUP_KEEP = 7  # daily database copies kept in workspace/backups
 SPOT_FRAC, SPOT_MIN = 0.1, 20  # judge-accepted items a human still sees (per queue)
 ALL = 10**9  # ``items(limit=ALL)``: every row, for pipelines
 # columns added after the first schema; (table, column, type) applied with ALTER TABLE
@@ -129,6 +131,51 @@ class Workspace:
             c.row_factory = sqlite3.Row
             self._local.conn = c
         return c
+
+    # ------------------------------------------------------------------ backups
+    def backup(self, keep: int = BACKUP_KEEP) -> Path:
+        """Today's copy of the database (every question, answer and review) in
+        ``backups/forge-YYYYMMDD.sqlite``, made once a day with SQLite's online backup; the
+        newest ``keep`` stay. Image files are not copied (uploads live in ``images/``)."""
+        d = self.root / "backups"
+        d.mkdir(exist_ok=True)
+        dest = d / f"forge-{time.strftime('%Y%m%d')}.sqlite"
+        if not dest.exists():
+            tmp = dest.with_suffix(".tmp")
+            src, dst = sqlite3.connect(self._path), sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+                src.close()
+            os.replace(tmp, dest)
+        for old in sorted(d.glob("forge-*.sqlite"))[:-keep]:
+            old.unlink()
+        return dest
+
+    def latest_backup(self) -> dict | None:
+        files = sorted((self.root / "backups").glob("forge-*.sqlite"))
+        if not files:
+            return None
+        st = files[-1].stat()
+        return {
+            "file": str(files[-1]),
+            "at": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="minutes"),
+            "count": len(files),
+        }
+
+    def start_backups(self, every_s: int = 3600) -> None:
+        """Back up now and check hourly (one copy per day) on a daemon thread."""
+
+        def loop():
+            while True:
+                try:
+                    self.backup()
+                except Exception as e:  # noqa: BLE001 - a failed backup must not stop the server
+                    print(f"backup failed: {e}", flush=True)
+                time.sleep(every_s)
+
+        threading.Thread(target=loop, daemon=True, name="backups").start()
 
     def sources(self) -> list[dict]:
         rows = self.db.execute(
