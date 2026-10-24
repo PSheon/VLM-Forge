@@ -1,7 +1,8 @@
 """HTTP API of the UI (docs/ui-spec §10 lists which screen calls what). ``create_app(ws, engine)``.
 
-① datasets: CRUD, upload / folder, ``label`` (teacher -> student -> compare -> triage as a
-background batch; ``/api/queues/{id}/cancel|resume``), export; its review sub-view:
+① datasets: CRUD, upload / folder / remove images, ``label`` (teacher -> student ->
+compare -> triage as a background batch; ``/api/queues/{id}/cancel|resume``), export; its
+review sub-view:
 ``/api/review/*`` and ``/api/items/{id}/review|reopen``. ② train: ``/api/train*``. ③ test:
 ``/api/test/summary``, ``/api/heldout/diff``, ``/api/images``, ``/api/compare``.
 Batches are the ``queues`` table; their progress lives in memory (``app.state.jobs``).
@@ -71,6 +72,10 @@ class DatasetIn(BaseModel):
 class DatasetUpdateIn(BaseModel):
     name: str | None = None
     config: dict | None = None
+
+
+class RemoveImagesIn(BaseModel):
+    image_ids: list[str]
 
 
 class FolderIn(BaseModel):
@@ -459,6 +464,21 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             raise HTTPException(404, "沒有這個資料集") from e
         return {"added": len(ids), "image_ids": ids}
 
+    @app.post("/api/datasets/{ds_id}/images/remove")
+    def dataset_remove_images(ds_id: int, body: RemoveImagesIn):
+        """Take images out of the dataset with their questions; refused while it is labelling
+        (the running batch would write questions for them again)."""
+        if any(
+            jobs.get(q["id"], {}).get("state") == "running"
+            for q in ws.queues()
+            if q.get("dataset_id") == ds_id
+        ):
+            raise HTTPException(409, "標註中，跑完或取消後才能移除圖")
+        try:
+            return store.remove_images(ds_id, body.image_ids)
+        except KeyError as e:
+            raise HTTPException(404, "沒有這個資料集") from e
+
     @app.post("/api/datasets/{ds_id}/label")
     def dataset_label(ds_id: int, n_images: int | None = None, model: str = "base"):
         """Run the teacher -> student -> compare chain on the dataset's unlabelled images,
@@ -554,7 +574,8 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             " from dataset_images di"
             " left join queues on queues.dataset_id = di.dataset_id"
             " left join items on items.queue_id = queues.id and items.image_id = di.image_id"
-            " where di.dataset_id = ? group by di.image_id, di.split order by di.added_at",
+            " where di.dataset_id = ? group by di.image_id, di.split"
+            " order by di.added_at, di.rowid",
             (ds_id,),
         ).fetchall()
         return [dict(r) for r in rows]

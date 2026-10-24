@@ -116,6 +116,9 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [skills, setSkills] = useState<Skill[]>(d.config.skills ?? ["detect", "point", "query", "caption"]);
   const [n, setN] = useState<number | "">("");
   const [askDelete, setAskDelete] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [askRemove, setAskRemove] = useState(false);
+  const lastPick = useRef<string | null>(null);
   const [rename, setRename] = useState(false);
   const [newName, setNewName] = useState(d.name);
   const [exp, setExp] = useState<{ jsonl: string; rows: number; zip?: string; images?: number } | null>(null);
@@ -155,6 +158,38 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const resume = async () => { if (!batch) return; setBusy(true); try { await api.resumeBatch(batch.id); say("接著跑：先補模型作答與比對…", "ok", { ms: 2500 }); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); } };
   const doExport = async () => { setBusy(true); try { const r = await api.exportDataset(d.id); setExp(r); say(`匯出 ${r.rows} 列`); } catch (e) { say(String(e), "bad"); } finally { setBusy(false); } };
   const doRename = async () => { try { await api.updateDataset(d.id, { name: newName.trim() }); setRename(false); say("改好了"); reload(); } catch (e) { say(String(e), "bad"); } };
+  // multi-select on the grid: the checkbox (or any thumb once something is picked) toggles,
+  // Shift extends from the last pick; the removal itself lives in the action column
+  const togglePick = (id: string, shift: boolean) => {
+    const ids = (grid ?? []).map((g) => g.image_id);
+    const a = shift && lastPick.current ? ids.indexOf(lastPick.current) : -1, b = ids.indexOf(id); // read the ref now, not inside the updater
+    setPicked((cur) => {
+      const next = new Set(cur);
+      if (shift && a >= 0) { const on = !cur.has(id); for (const x of ids.slice(Math.min(a, b), Math.max(a, b) + 1)) { if (on) next.add(x); else next.delete(x); } }
+      else if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+    lastPick.current = id;
+  };
+  useEffect(() => { setPicked(new Set()); }, [d.id]);
+  useEffect(() => { if (grid) setPicked((cur) => { const have = new Set(grid.map((g) => g.image_id)); const next = new Set([...cur].filter((x) => have.has(x))); return next.size === cur.size ? cur : next; }); }, [grid]);
+  useEffect(() => {
+    if (tab !== "images" || !picked.size) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if ((t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) || document.querySelector(".overlay")) return;
+      if (e.key === "Escape") setPicked(new Set());
+      else if ((e.key === "Delete" || e.key === "Backspace") && !running) { e.preventDefault(); setAskRemove(true); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  const pickedCells = (grid ?? []).filter((g) => picked.has(g.image_id));
+  const pickedQ = pickedCells.reduce((s, g) => s + g.n, 0), pickedDone = pickedCells.reduce((s, g) => s + g.n - g.pending, 0);
+  const doRemove = async () => {
+    setAskRemove(false); setBusy(true);
+    try { const r = await api.removeImages(d.id, [...picked]); setPicked(new Set()); say(`移除了 ${r.removed} 張（${r.items} 題）`, "warn"); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
+  };
   const doDelete = async () => { await api.deleteDataset(d.id); say(`刪了 ${d.name}`, "warn"); setAskDelete(false); onDeleted(); };
   const freeGb = status?.engine.gpu_free_gb ?? null;
   const judgeLoaded = status?.engine.judge_loaded ?? false;
@@ -203,9 +238,9 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
               <input placeholder="GB300 上的資料夾路徑，例如 /home/paul/VLM-Forge/workspace/captures/1026" value={dir} onChange={(e) => setDir(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addFolder()} style={{ flex: 1 }} />
               <button onClick={addFolder} disabled={busy || !dir.trim()}>加入資料夾</button>
             </div>
-            <div className="small muted">{grid?.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查` : grid === null ? "載入中…" : "還沒有圖"}</div>
+            <div className="small muted">{picked.size ? `已選 ${picked.size} 張 · 點縮圖加選或取消 · Shift 連選 · Esc 取消選取` : grid?.length ? `${grid.length} 張（val ${grid.filter((g) => g.split === "val").length}）· 紅色數字＝這張還有幾題不一致 · 點一張進去檢查 · 左上角 ☐ 多選` : grid === null ? "載入中…" : "還沒有圖"}</div>
             {grid === null && (full ?? d).images > 0 && <div className="thumbs" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))" }}>{Array.from({ length: Math.min(30, (full ?? d).images) }, (_, i) => <div key={i} className="skel" style={{ aspectRatio: "4/3", borderRadius: 4 }} />)}</div>}
-            <Grid cells={grid ?? []} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
+            <Grid cells={grid ?? []} picked={picked} onPick={togglePick} onOpen={(cell) => { if (cell.n) { setOpenImage(cell.image_id); setTab("review"); } }} />
           </div>
           <div className="actions">
             <ActionsHead />
@@ -217,6 +252,11 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
               {cta?.run !== label && unlabelled > 0 && !running && !interrupted(batch) && <span className="muted">{labelBlocked ? labelText : ""}</span>}
               {cta && !cta.text.startsWith("去檢查") && pendingImgs > 0 && !running && <button className="ghost" onClick={() => setTab("review")}>去檢查（{pendingImgs} 張）→</button>}
             </div>
+            <Pop show={picked.size > 0} className="panel col">
+              <div className="row" style={{ justifyContent: "space-between" }}><b>已選 {picked.size} 張</b><span className="row"><button className="ghost" onClick={() => setPicked(new Set((grid ?? []).map((g) => g.image_id)))}>全選</button><button className="ghost" onClick={() => setPicked(new Set())}>取消選取</button></span></div>
+              <div className="small muted">{pickedQ ? `${pickedQ} 題，其中 ${pickedDone} 題已確認或自動通過` : "還沒標註"}</div>
+              {running ? <div className="hint warn-text">標註中，跑完或取消後才能移除</div> : <button className="ghost bad" onClick={() => setAskRemove(true)} disabled={busy}>從資料集移除 {picked.size} 張…</button>}
+            </Pop>
             {!!sp?.total && <SpotCard sp={sp} onOpen={() => { setSpotOnly(true); setTab("review"); }} />}
             {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
             {full && full.batches && full.batches.length > 1 && (
@@ -257,6 +297,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
 
       {tab === "review" && <Review spotOnly={spotOnly} setSpotOnly={setSpotOnly} reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} header={header} onExit={() => setTab("images")} />}
       </Fade>
+      <ConfirmDialog open={askRemove} title={`從 ${d.name} 移除 ${picked.size} 張？`} body={<>這些圖{pickedQ ? <>和它們的 <b>{pickedQ} 題</b>（已確認 {pickedDone} 題）</> : ""}會從資料集拿掉，之後訓練不會用到，不能復原。上傳的原檔沒有別的資料集在用就一起刪；GB300 資料夾裡的原檔不動。</>} confirmText={`移除 ${picked.size} 張`} danger onCancel={() => setAskRemove(false)} onConfirm={doRemove} />
       <ConfirmDialog open={askDelete} title={`刪除 ${d.name}？`} body="只刪資料集與歸屬；圖和題留在工作區。" confirmText="刪除" typed={d.name} danger onCancel={() => setAskDelete(false)} onConfirm={doDelete} />
     </div>
   );
@@ -304,13 +345,15 @@ function BatchCard({ b, onCancel, onResume, busy, skippedNote }: { b: Batch; onC
   );
 }
 
-function Grid({ cells, onOpen }: { cells: GridCell[]; onOpen: (c: GridCell) => void }) {
+function Grid({ cells, picked, onPick, onOpen }: { cells: GridCell[]; picked: Set<string>; onPick: (id: string, shift: boolean) => void; onOpen: (c: GridCell) => void }) {
   if (!cells.length) return null;
+  const picking = picked.size > 0; // once something is picked, a click on any thumb picks
   return (
-    <div className="thumbs" style={{ maxHeight: "calc(100vh - 330px)", gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))" }}>
+    <div className={`thumbs${picking ? " picking" : ""}`} style={{ maxHeight: "calc(100vh - 330px)", gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))" }}>
       {cells.map((c) => (
-        <div key={c.image_id} className="th" onClick={() => onOpen(c)} title={`${c.n} 題 · 不一致 ${c.fix} · ${c.split === "val" ? "驗證集" : "訓練"}`}>
+        <div key={c.image_id} className={`th${picked.has(c.image_id) ? " picked" : ""}`} onClick={(e) => (picking ? onPick(c.image_id, e.shiftKey) : onOpen(c))} title={`${c.n} 題 · 不一致 ${c.fix} · ${c.split === "val" ? "驗證集" : "訓練"}`}>
           <img src={api.imageUrl(c.image_id, 200)} loading="lazy" />
+          <span className="pick" role="checkbox" aria-checked={picked.has(c.image_id)} aria-label="選取" onClick={(e) => { e.stopPropagation(); onPick(c.image_id, e.shiftKey); }}>{picked.has(c.image_id) ? "✓" : ""}</span>
           {c.split === "val" && <b className="val">val</b>}
           {c.n > 0 && <b className={c.fix > 0 ? "fix" : c.pending > 0 ? "" : "approved"}>{c.fix > 0 ? c.fix : c.pending > 0 ? c.pending : "✓"}</b>}
         </div>

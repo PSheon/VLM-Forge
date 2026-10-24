@@ -193,6 +193,65 @@ class DatasetStore:
             args.append(split)
         return [r["image_id"] for r in self.db.execute(q + " order by added_at, image_id", args)]
 
+    def remove_images(self, ds_id: int, image_ids: list[str]) -> dict:
+        """Takes images out of the dataset together with their questions in it (reviewed or
+        not), and drops them from its batches' configs so 「接著跑」 does not ask them again.
+        A file this workspace stored (upload / zip) is deleted once nothing else uses it; a
+        file in a GB300 folder is never touched."""
+        self.get(ds_id)
+        ids = sorted(set(image_ids))
+        if not ids:
+            return {"removed": 0, "items": 0, "files": 0}
+        marks = ",".join("?" * len(ids))
+        with self.ws.lock:
+            qids = [
+                r[0]
+                for r in self.db.execute("select id from queues where dataset_id = ?", (ds_id,))
+            ]
+            n_items = 0
+            if qids:
+                qm = ",".join("?" * len(qids))
+                n_items = self.db.execute(
+                    f"delete from items where image_id in ({marks}) and queue_id in ({qm})",
+                    (*ids, *qids),
+                ).rowcount
+                for qid, cfg in self.db.execute(
+                    f"select id, config from queues where id in ({qm}) and config is not null",
+                    qids,
+                ).fetchall():
+                    c = json.loads(cfg)
+                    if "image_ids" in c:
+                        c["image_ids"] = [i for i in c["image_ids"] if i not in set(ids)]
+                        self.db.execute(
+                            "update queues set config = ? where id = ?",
+                            (json.dumps(c, ensure_ascii=False), qid),
+                        )
+            removed = self.db.execute(
+                f"delete from dataset_images where dataset_id = ? and image_id in ({marks})",
+                (ds_id, *ids),
+            ).rowcount
+            # files this workspace owns and nothing references any more
+            orphans = self.db.execute(
+                f"select id, path from images where id in ({marks})"
+                " and id not in (select image_id from dataset_images)"
+                " and id not in (select image_id from items)",
+                ids,
+            ).fetchall()
+            files = 0
+            root = self.ws.images_dir.resolve()
+            for r in orphans:
+                path = Path(r["path"])
+                if path.resolve().parent != root:
+                    continue  # a folder on this machine: not ours to delete
+                path.unlink(missing_ok=True)
+                for c in (self.ws.root / "cache").glob(f"{r['id']}-w*.jpg"):
+                    c.unlink(missing_ok=True)
+                self.db.execute("delete from images where id = ?", (r["id"],))
+                files += 1
+            self.db.execute("update datasets set updated_at = ? where id = ?", (now(), ds_id))
+            self.db.commit()
+        return {"removed": removed, "items": n_items, "files": files}
+
     def unlabelled_image_ids(self, ds_id: int) -> list[str]:
         """Images of the dataset that no batch has produced items for yet."""
         rows = self.db.execute(
