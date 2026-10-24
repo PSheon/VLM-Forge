@@ -42,6 +42,7 @@
 - 清單＝列表列：前 4 張縮圖、名稱＋狀態 pill（標註中 n/m、還有 N 張要看、全部確認、N 張還沒標、沒有圖、上次標註失敗、標註中斷）、模式與更新時間、看過比例進度條、圖／題／已確認／驗證、›；1280 以下藏數字。
 - 新資料集 dialog：名稱必填且不重複（即時檢查）、備註。
 - 詳情頁左欄＝圖片格：拖曳區（多張、zip）、資料夾路徑（不存在／含 held-out 拒絕）、縮圖角標（val／不一致數／✓）。點縮圖或「去檢查」進檢查，「← 全部圖片」或 Esc 回來。
+- 移除圖：縮圖左上角 ☐（hover 才出現）勾選；選了任一張後點縮圖＝加選／取消，Shift 連選，Esc 取消選取。動作欄主按鈕下出現「已選 N 張」卡（全選、取消選取、N 題其中幾題已確認、「從資料集移除 N 張…」，Delete 同效）；確認 dialog 寫明會一起刪的題數。連同這些圖在此資料集的題一起刪；上傳的原檔沒有別的資料集在用才刪，GB300 資料夾的原檔不動；標註中不能移除。
 - 右欄依第 1 節順序：主按鈕（下一步）→ 批次卡 → 「AI 導師可信度」卡 → 「AI 導師設定」區塊 → 「匯出」區塊 → 底部建立時間與刪除（輸入名稱確認）。
 - 主按鈕依狀態切換：選照片加進來 → 標註新加的 N 張 → 標註中 n/m → 去檢查（還有 N 張）→ 去訓練；標註被 GPU 擋住時主鈕變「去檢查」，標註狀態退成灰字。
 - 批次卡：四階段、進度條、ETA、取消；失敗紅卡附原因；學生沒作答時橘字並繼續。中斷（server 重啟／取消）：紅卡列出「N 張還沒出題 · M 題模型還沒答 · K 題還沒比對」＋「接著跑」；清單 pill「標註中斷，可接著跑」。
@@ -123,7 +124,7 @@
 | 畫面 | 端點 |
 | --- | --- |
 | 骨架 | `GET /api/status`、`POST /api/status/clear-error`、`GET /api/review/summary` |
-| ① 資料集 | `GET/POST /api/datasets`、`GET/POST/DELETE /api/datasets/{id}`、`GET …/grid`、`POST …/upload`、`POST …/folder`、`POST …/label`、`POST …/export`、`GET …/download/{jsonl|zip}`、`POST /api/queues/{qid}/cancel`、`POST /api/queues/{qid}/resume` |
+| ① 資料集 | `GET/POST /api/datasets`、`GET/POST/DELETE /api/datasets/{id}`、`GET …/grid`、`POST …/upload`、`POST …/folder`、`POST …/images/remove`、`POST …/label`、`POST …/export`、`GET …/download/{jsonl|zip}`、`POST /api/queues/{qid}/cancel`、`POST /api/queues/{qid}/resume` |
 | 檢查 | `GET /api/review/next-image`、`GET /api/review/images`、`GET /api/review/image/{image_id}`、`POST /api/review/image`、`POST /api/items/{id}/review`、`POST /api/items/{id}/reopen` |
 | ② 訓練 | `GET/POST /api/train`、`POST /api/train/{name}/cancel`、`DELETE /api/train/{name}` |
 | ③ 測試 | `GET /api/test/summary`、`GET /api/heldout/diff`、`GET/POST /api/images`、`GET /api/sources`、`POST /api/compare`、`POST /api/datasets/{id}/items`、`GET /api/train/{name}/orin.zip` |

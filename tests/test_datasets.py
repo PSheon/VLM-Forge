@@ -3,6 +3,7 @@
 import io
 import time
 import zipfile
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -257,3 +258,40 @@ def test_write_config_always_validates_when_it_can(tmp_path, monkeypatch):
     assert data("b", 113)["val_images"] == 11
     assert data("c", 6)["val_images"] == 1
     assert data("d", 2)["val_images"] == 0
+
+
+def test_remove_images_takes_their_questions_and_owned_files(client, tmp_path):
+    """Removing an image drops it, its questions in this dataset and (for an upload nothing
+    else uses) its file; a folder file stays on disk; 接著跑 no longer counts it."""
+    ds = client.post("/api/datasets", json={"name": "rm"}).json()
+    other = client.post("/api/datasets", json={"name": "other"}).json()
+    up = [
+        client.post(
+            f"/api/datasets/{ds['id']}/upload", files={"file": (f"{c}.png", png(c), "image/png")}
+        ).json()["image_ids"][0]
+        for c in ("red", "green", "blue")
+    ]
+    folder = tmp_path / "cam1"
+    folder.mkdir()
+    (folder / "f.png").write_bytes(png("white"))
+    fid = client.post(f"/api/datasets/{ds['id']}/folder", json={"dir": str(folder)}).json()[
+        "image_ids"
+    ][0]
+    client.post(
+        f"/api/datasets/{other['id']}/upload", files={"file": ("g.png", png("green"), "image/png")}
+    )
+    q = wait(client, client.post(f"/api/datasets/{ds['id']}/label").json()["id"])
+    before = client.get(f"/api/datasets/{ds['id']}").json()
+    per_image = before["items"] // 4
+    red, green = up[0], up[1]
+    red_path = client.ws.image(red)["path"]
+    r = client.post(
+        f"/api/datasets/{ds['id']}/images/remove", json={"image_ids": [red, green, fid]}
+    ).json()
+    assert r == {"removed": 3, "items": 3 * per_image, "files": 1}  # green is in "other"
+    after = client.get(f"/api/datasets/{ds['id']}").json()
+    assert after["images"] == 1 and after["items"] == per_image
+    assert not Path(red_path).exists() and (folder / "f.png").exists()
+    assert client.get(f"/api/datasets/{other['id']}").json()["images"] == 1
+    assert client.get(f"/api/queues/{q['id']}").json()["unfinished"]["images"] == 0
+    assert {c["image_id"] for c in client.get(f"/api/datasets/{ds['id']}/grid").json()} == {up[2]}
