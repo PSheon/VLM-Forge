@@ -118,6 +118,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   const [askDelete, setAskDelete] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [askRemove, setAskRemove] = useState(false);
+  const [askRelabel, setAskRelabel] = useState(false);
   const lastPick = useRef<string | null>(null);
   const [rename, setRename] = useState(false);
   const [newName, setNewName] = useState(d.name);
@@ -186,6 +187,11 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   });
   const pickedCells = (grid ?? []).filter((g) => picked.has(g.image_id));
   const pickedQ = pickedCells.reduce((s, g) => s + g.n, 0), pickedDone = pickedCells.reduce((s, g) => s + g.n - g.pending, 0);
+  const pickedMachine = pickedCells.reduce((s, g) => s + g.n - (g.kept ?? 0), 0); // what 重新標註 replaces
+  const doRelabel = async () => {
+    setAskRelabel(false); setBusy(true); askNotify();
+    try { if (cfgDirty) await saveConfig(); const r = await api.relabel(d.id, [...picked]); setPicked(new Set()); say(`重新標註 ${r.job?.total ?? picked.size} 張：換掉 ${r.reset.dropped} 題，保留你看過的 ${r.reset.kept} 題`, "ok", { ms: 3000 }); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
+  };
   const doRemove = async () => {
     setAskRemove(false); setBusy(true);
     try { const r = await api.removeImages(d.id, [...picked]); setPicked(new Set()); say(`移除了 ${r.removed} 張（${r.items} 題）`, "warn"); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
@@ -255,7 +261,13 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
             <Pop show={picked.size > 0} className="panel col">
               <div className="row" style={{ justifyContent: "space-between" }}><b>已選 {picked.size} 張</b><span className="row"><button className="ghost" onClick={() => setPicked(new Set((grid ?? []).map((g) => g.image_id)))}>全選</button><button className="ghost" onClick={() => setPicked(new Set())}>取消選取</button></span></div>
               <div className="small muted">{pickedQ ? `${pickedQ} 題，其中 ${pickedDone} 題已確認或自動通過` : "還沒標註"}</div>
-              {running ? <div className="hint warn-text">標註中，跑完或取消後才能移除</div> : <button className="ghost bad" onClick={() => setAskRemove(true)} disabled={busy}>從資料集移除 {picked.size} 張…</button>}
+              {running ? <div className="hint warn-text">標註中，跑完或取消後才能重新標註或移除</div> : (
+                <div className="row" style={{ justifyContent: "space-between" }}>
+                  <button onClick={() => setAskRelabel(true)} disabled={busy || labelBlocked} title={labelBlocked ? labelText : "用目前的 AI 導師設定重出這些圖的題；你看過的題保留"}>重新標註 {picked.size} 張…</button>
+                  <button className="ghost bad" onClick={() => setAskRemove(true)} disabled={busy}>從資料集移除…</button>
+                </div>
+              )}
+              {!running && labelBlocked && <div className="hint muted">{labelText}</div>}
             </Pop>
             {!!sp?.total && <SpotCard sp={sp} onOpen={() => { setSpotOnly(true); setTab("review"); }} />}
             {batch && <BatchCard b={batch} onCancel={cancel} onResume={resume} busy={busy || gpuBusy} skippedNote={skippedNote} />}
@@ -297,6 +309,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
 
       {tab === "review" && <Review spotOnly={spotOnly} setSpotOnly={setSpotOnly} reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} header={header} onExit={() => setTab("images")} />}
       </Fade>
+      <ConfirmDialog open={askRelabel} title={`重新標註 ${picked.size} 張？`} body={<>用<b>目前的 AI 導師設定</b>（{modeText}{probeList.length && mode !== "fixed" ? `、每張圖都問 ${probeList.join("／")}` : ""}）重出這些圖的題。自動通過與待看的 {pickedMachine} 題換掉；你看過、改過、丟棄或自己加的題保留，也不會重複出。約 20 秒/張。</>} confirmText={`重新標註 ${picked.size} 張`} onCancel={() => setAskRelabel(false)} onConfirm={doRelabel} />
       <ConfirmDialog open={askRemove} title={`從 ${d.name} 移除 ${picked.size} 張？`} body={<>這些圖{pickedQ ? <>和它們的 <b>{pickedQ} 題</b>（已確認 {pickedDone} 題）</> : ""}會從資料集拿掉，之後訓練不會用到，不能復原。上傳的原檔沒有別的資料集在用就一起刪；GB300 資料夾裡的原檔不動。</>} confirmText={`移除 ${picked.size} 張`} danger onCancel={() => setAskRemove(false)} onConfirm={doRemove} />
       <ConfirmDialog open={askDelete} title={`刪除 ${d.name}？`} body="只刪資料集與歸屬；圖和題留在工作區。" confirmText="刪除" typed={d.name} danger onCancel={() => setAskDelete(false)} onConfirm={doDelete} />
     </div>

@@ -286,7 +286,10 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
                     for j, t in enumerate(ts):
                         per_image[j] += items_from_fixed(t, fixed)
                 for image_id, its in zip(chunk, per_image, strict=True):
-                    seen: set[tuple[str, str]] = set()
+                    # a relabelled image keeps its human answers: do not ask those again
+                    seen = (
+                        store.asked(cfg["dataset_id"], image_id) if cfg.get("dataset_id") else set()
+                    )
                     for it in its:
                         key = (it["skill"], it["prompt"])
                         if key in seen:
@@ -429,7 +432,11 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             d = store.get(ds_id)
         except KeyError as e:
             raise HTTPException(404) from e
-        d["batches"] = [_batch(q) for q in ws.queues() if q.get("dataset_id") == ds_id]
+        d["batches"] = [  # labelling batches only (hand-added questions have their own queue)
+            _batch(q)
+            for q in ws.queues()
+            if q.get("dataset_id") == ds_id and q.get("mode") == "auto"
+        ]
         d["unlabelled"] = len(store.unlabelled_image_ids(ds_id))
         return d
 
@@ -468,29 +475,54 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
     def dataset_remove_images(ds_id: int, body: RemoveImagesIn):
         """Take images out of the dataset with their questions; refused while it is labelling
         (the running batch would write questions for them again)."""
-        if any(
-            jobs.get(q["id"], {}).get("state") == "running"
-            for q in ws.queues()
-            if q.get("dataset_id") == ds_id
-        ):
+        if _labelling(ds_id):
             raise HTTPException(409, "標註中，跑完或取消後才能移除圖")
         try:
             return store.remove_images(ds_id, body.image_ids)
         except KeyError as e:
             raise HTTPException(404, "沒有這個資料集") from e
 
+    def _labelling(ds_id: int) -> bool:
+        return any(
+            jobs.get(q["id"], {}).get("state") == "running"
+            for q in ws.queues()
+            if q.get("dataset_id") == ds_id
+        )
+
     @app.post("/api/datasets/{ds_id}/label")
     def dataset_label(ds_id: int, n_images: int | None = None, model: str = "base"):
         """Run the teacher -> student -> compare chain on the dataset's unlabelled images,
         following its config (auto questions and/or fixed prompts)."""
-        ds = store.get(ds_id)
         ids = store.unlabelled_image_ids(ds_id)
         if n_images:
             ids = ids[:n_images]
         if not ids:
             raise HTTPException(409, "沒有還沒標的圖")
+        return _label(ds_id, ids, model)
+
+    @app.post("/api/datasets/{ds_id}/relabel")
+    def dataset_relabel(ds_id: int, body: RemoveImagesIn, model: str = "base"):
+        """Ask these images again with the current teacher settings (e.g. after adding 每張圖都
+        問的物件): machine questions are replaced, human ones kept."""
+        if _labelling(ds_id):
+            raise HTTPException(409, "標註中，跑完或取消後再重新標註")
+        if not body.image_ids:
+            raise HTTPException(422, "沒有選圖")
+        try:
+            reset = store.reset_for_relabel(ds_id, body.image_ids)
+        except KeyError as e:
+            raise HTTPException(404, "沒有這個資料集") from e
+        return {**_label(ds_id, body.image_ids, model), "reset": reset}
+
+    def _label(ds_id: int, ids: list[str], model: str) -> dict:
+        ds = store.get(ds_id)
         cfg = ds["config"]
-        qname = f"{ds['name']}-{time.strftime('%m%d-%H%M%S')}"
+        qname = base = f"{ds['name']}-{time.strftime('%m%d-%H%M%S')}"
+        taken = {q["name"] for q in ws.queues()}
+        for k in range(2, 100):  # two batches started in the same second
+            if qname not in taken:
+                break
+            qname = f"{base}-{k}"
         q = ws.create_queue(qname, "query", model, "autogen", Path(paths.JUDGE_MODEL).name)
         store.attach_queue(q["id"], ds_id)
         job_cfg = {
@@ -503,6 +535,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             "probes": cfg["probes"] if "probes" in cfg else DEFAULT_PROBES,
             "model": model,
             "seed": 0,
+            "dataset_id": ds_id,
         }
         ws.set_queue_mode(q["id"], "auto", job_cfg)
         _start(q["id"], _autogen_queue, job_cfg)
@@ -570,7 +603,9 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             "select di.image_id, di.split, count(items.id) n,"
             " sum(items.status = 'pending') pending,"
             " sum(items.verdict = 'fix' and items.status = 'pending') fix,"
-            " sum(items.status = 'auto') auto"
+            " sum(items.status = 'auto') auto,"
+            " sum(items.status in ('approved', 'corrected', 'discarded')"
+            " or items.origin = 'workbench') kept"  # what 重新標註 leaves alone
             " from dataset_images di"
             " left join queues on queues.dataset_id = di.dataset_id"
             " left join items on items.queue_id = queues.id and items.image_id = di.image_id"
@@ -582,18 +617,42 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
 
     @app.post("/api/datasets/{ds_id}/items")
     def dataset_item(ds_id: int, body: ItemIn):
-        """A confirmed item saved by hand (the playground's 存成資料集的題)."""
+        """An item added by hand: confirmed (the playground's 存成資料集的題) or, with
+        ``action="pending"``, a new question for the review page to answer (＋加一題)."""
         ds = store.get(ds_id)
-        qname = f"{ds['name']}-manual"
-        try:
-            q = ws.queue_by_name(qname)
-        except KeyError:
+        # one hand-made queue per dataset, found by id (a deleted dataset's queue keeps its
+        # name, so a new dataset with the same name must not reuse it)
+        q = next(
+            (
+                x
+                for x in ws.queues()
+                if x.get("dataset_id") == ds_id
+                and x.get("mode") != "auto"
+                and x["note"] == "manual"
+            ),
+            None,
+        )
+        if q is None:
+            taken = {x["name"] for x in ws.queues()}
+            qname = f"{ds['name']}-manual"
+            if qname in taken:
+                qname = f"{ds['name']}-manual-{ds_id}"
             q = ws.create_queue(qname, "query", "base", "manual")
             store.attach_queue(q["id"], ds_id)
         store.add_image(ds_id, body.image_id)
+        if body.skill not in SKILLS or not body.prompt.strip():
+            raise HTTPException(422, "要有 skill 和題目")
         item_id = ws.add_item(
-            body.image_id, body.skill, body.prompt, body.pred, body.pred_model, q["id"], "workbench"
+            body.image_id,
+            body.skill,
+            body.prompt.strip(),
+            body.pred,
+            body.pred_model,
+            q["id"],
+            "workbench",
         )
+        if body.action == "pending":
+            return ws.item(item_id)
         try:
             return ws.review(item_id, body.action, body.reviewer, body.label)
         except ValueError as e:

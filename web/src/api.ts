@@ -101,7 +101,7 @@ export interface Dataset {
   unlabelled?: number;
 }
 
-export interface GridCell { image_id: string; split: "train" | "val"; n: number; pending: number; fix: number; auto: number }
+export interface GridCell { image_id: string; split: "train" | "val"; n: number; pending: number; fix: number; auto: number; kept: number }
 
 export interface Summary {
   images: number; items: number; images_pending: number; images_fix: number;
@@ -170,6 +170,7 @@ export const api = {
   deleteDataset: (id: number) => j<{ ok: true }>(del(`/api/datasets/${id}`)),
   datasetGrid: (id: number) => j<GridCell[]>(fetch(`/api/datasets/${id}/grid`)),
   uploadToDataset: (id: number, file: File) => { const fd = new FormData(); fd.append("file", file); return j<{ added: number; image_ids: string[] }>(fetch(`/api/datasets/${id}/upload`, { method: "POST", body: fd })); },
+  relabel: (id: number, image_ids: string[]) => j<Batch & { reset: { dropped: number; kept: number } }>(post(`/api/datasets/${id}/relabel`, { image_ids })),
   removeImages: (id: number, image_ids: string[]) => j<{ removed: number; items: number; files: number }>(post(`/api/datasets/${id}/images/remove`, { image_ids })),
   addFolder: (id: number, dir: string, limit?: number) => j<{ added: number }>(post(`/api/datasets/${id}/folder`, { dir, limit })),
   label: (id: number, n?: number) => j<Batch>(post(`/api/datasets/${id}/label${n ? `?n_images=${n}` : ""}`, {})),

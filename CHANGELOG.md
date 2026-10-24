@@ -5,12 +5,16 @@ All notable changes to VLM-Forge. Versions follow [SemVer](https://semver.org/);
 ## [Unreleased]
 
 ### Fixed
+- Hand-added questions were filed by dataset name, so a new dataset reusing a deleted one's name lost them to the old queue; the queue is found by dataset id, and the dataset's batch list shows labelling batches only (the hand-made queue never shows as 「上一輪」).
+- Two labelling batches started in the same second no longer collide on the batch name.
 - **Count answers given by pointing.** Moondream 3 sometimes answers "How many forklifts are there?" with `There is` + a grounded point (the engine does the same); the point was dropped and the answer read "There is ". `Moondream.query_grounded()` keeps the points, the agreement rule counts them, and the UI shows `There is⟨1 個點⟩`. Held-out scoring keeps the plain `query()`, byte-identical to the engine.
 - **Re-running triage** no longer re-draws the spot check (it had auto-passed 128 of 149 sampled questions on a half-reviewed batch).
 - The AI-teacher settings' save row stays in view while the action column scrolls; side-by-side canvases keep their controls on one line.
 - **Training always validates when it can.** A run whose datasets had no confirmed question in their val split trained with no val curve at all (ft-1023-1911). It now holds out ~10 % of the train images (≥ 5 images) instead, and the train page's summary says where validation comes from (datasets return `val_rows`), with a warning when there is none.
 
 ### Added
+- **Relabel selected images.** 「重新標註 N 張…」 in the selection card asks those images again with the current teacher settings — e.g. the 120 images labelled before 每張圖都問的物件 existed get their negative questions. Machine questions (auto-passed, pending) are replaced; anything a human saved, discarded or added stays and is not asked twice. `POST /api/datasets/{id}/relabel`.
+- **Add a question while reviewing** (`A` or 「＋ 加一題」 atop the question list): Detect / Point / Query plus the object or question; it joins the image as a pending question and opens.
 - **Remove images from a dataset.** Tick thumbnails (the box in the corner, Shift for a range, Esc to clear), then 「從資料集移除 N 張…」 in the action column or `Delete`. Their questions in that dataset go with them; an uploaded file is deleted once no other dataset uses it, a file in a GB300 folder is never touched; refused while the dataset is labelling, and 「接著跑」 no longer asks removed images. `POST /api/datasets/{id}/images/remove`.
 - **Negative probes in auto mode.** Every image is also asked about a short list of objects (default person, forklift, helmet; editable as 「每張圖都問的物件」); one the teacher did not list becomes a 0-box detect question. On the factory held-out exam Moondream base scores person F1 0.09 (it draws people on empty frames) against the teacher's 0.64, and auto questions alone never ask about what is absent. If the teacher missed the object and Moondream draws it, the question disagrees and goes to a human.
 - **Teacher vs gold on the CCTV exam** (`runs/teacher-eval/`): 8B detect 0.507 / point 0.457 / query 0.971, 32B 0.456 / 0.452 / 0.971, Moondream base 0.368 / 0.557 / 0.981 — the 8B fallback is not worse than the 32B.

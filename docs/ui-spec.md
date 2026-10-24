@@ -42,7 +42,7 @@
 - 清單＝列表列：前 4 張縮圖、名稱＋狀態 pill（標註中 n/m、還有 N 張要看、全部確認、N 張還沒標、沒有圖、上次標註失敗、標註中斷）、模式與更新時間、看過比例進度條、圖／題／已確認／驗證、›；1280 以下藏數字。
 - 新資料集 dialog：名稱必填且不重複（即時檢查）、備註。
 - 詳情頁左欄＝圖片格：拖曳區（多張、zip）、資料夾路徑（不存在／含 held-out 拒絕）、縮圖角標（val／不一致數／✓）。點縮圖或「去檢查」進檢查，「← 全部圖片」或 Esc 回來。
-- 移除圖：縮圖左上角 ☐（hover 才出現）勾選；選了任一張後點縮圖＝加選／取消，Shift 連選，Esc 取消選取。動作欄主按鈕下出現「已選 N 張」卡（全選、取消選取、N 題其中幾題已確認、「從資料集移除 N 張…」，Delete 同效）；確認 dialog 寫明會一起刪的題數。連同這些圖在此資料集的題一起刪；上傳的原檔沒有別的資料集在用才刪，GB300 資料夾的原檔不動；標註中不能移除。
+- 移除圖：縮圖左上角 ☐（hover 才出現）勾選；選了任一張後點縮圖＝加選／取消，Shift 連選，Esc 取消選取。動作欄主按鈕下出現「已選 N 張」卡（全選、取消選取、N 題其中幾題已確認、「重新標註 N 張…」、「從資料集移除…」，Delete＝移除）；確認 dialog 寫明會換掉／刪掉的題數。重新標註用目前的 AI 導師設定（dialog 列出模式與每張圖都問的物件），標註被擋時按鈕灰掉並寫原因。連同這些圖在此資料集的題一起刪；上傳的原檔沒有別的資料集在用才刪，GB300 資料夾的原檔不動；標註中不能移除。
 - 右欄依第 1 節順序：主按鈕（下一步）→ 批次卡 → 「AI 導師可信度」卡 → 「AI 導師設定」區塊 → 「匯出」區塊 → 底部建立時間與刪除（輸入名稱確認）。
 - 主按鈕依狀態切換：選照片加進來 → 標註新加的 N 張 → 標註中 n/m → 去檢查（還有 N 張）→ 去訓練；標註被 GPU 擋住時主鈕變「去檢查」，標註狀態退成灰字。
 - 批次卡：四階段、進度條、ETA、取消；失敗紅卡附原因；學生沒作答時橘字並繼續。中斷（server 重啟／取消）：紅卡列出「N 張還沒出題 · M 題模型還沒答 · K 題還沒比對」＋「接著跑」；清單 pill「標註中斷，可接著跑」。
@@ -58,6 +58,7 @@
 - 主按鈕隨狀態「沒問題」／「存修正」（Enter；Space 留給拖動畫面）；丟棄（D）；跳過（S，釋放認領）；剩下全存（Shift+Enter，3 秒內可復原）；←/→ 換題、Z 還原這題、G 所有圖、? 說明。Ctrl+Z＝重開上一個存過的題（跨圖；整張全存算一步）；標題列灰字顯示節奏「每題 N 秒 · 剩約 X」（最近的存檔間隔，超過 2 分鐘的停頓不算）。畫面底部常駐一行快捷鍵（只列此題用得到的），按到的鍵亮橘色。
 - 圖工具列：縮放、適應（F）、預標顯示切換、H 看原圖；拖動畫面＝Space／中鍵／右鍵。畫布高度跟著圖的長寬比（不留黑邊，最高到視窗底）；換到框／點題時自動縮放到「預標 ∪ 模型」的框（占畫面 70%），F 回全圖。
 - 認領：10 分鐘；所有圖 overlay 顯示別人認領中（灰＋名字）。
+- ＋加一題（A）：題目清單頂端一行；dialog 選 Detect／Point／Query、輸入物件或問題（Enter 加入），加了就成為這張的待看題並跳到它；同一題已存在則提示。
 - 「只看抽查」：檢查頁工具列的切換（和資料集頁可信度卡同一個開關），開啟時只取有抽查題的圖、Enter 只在抽查題之間前進。
 
 ### 4.3 detect
@@ -124,8 +125,8 @@
 | 畫面 | 端點 |
 | --- | --- |
 | 骨架 | `GET /api/status`、`POST /api/status/clear-error`、`GET /api/review/summary` |
-| ① 資料集 | `GET/POST /api/datasets`、`GET/POST/DELETE /api/datasets/{id}`、`GET …/grid`、`POST …/upload`、`POST …/folder`、`POST …/images/remove`、`POST …/label`、`POST …/export`、`GET …/download/{jsonl|zip}`、`POST /api/queues/{qid}/cancel`、`POST /api/queues/{qid}/resume` |
-| 檢查 | `GET /api/review/next-image`、`GET /api/review/images`、`GET /api/review/image/{image_id}`、`POST /api/review/image`、`POST /api/items/{id}/review`、`POST /api/items/{id}/reopen` |
+| ① 資料集 | `GET/POST /api/datasets`、`GET/POST/DELETE /api/datasets/{id}`、`GET …/grid`、`POST …/upload`、`POST …/folder`、`POST …/images/remove`、`POST …/relabel`、`POST …/label`、`POST …/export`、`GET …/download/{jsonl|zip}`、`POST /api/queues/{qid}/cancel`、`POST /api/queues/{qid}/resume` |
+| 檢查 | `GET /api/review/next-image`、`GET /api/review/images`、`GET /api/review/image/{image_id}`、`POST /api/review/image`、`POST /api/items/{id}/review`、`POST /api/items/{id}/reopen`、`POST /api/datasets/{id}/items`（加一題） |
 | ② 訓練 | `GET/POST /api/train`、`POST /api/train/{name}/cancel`、`DELETE /api/train/{name}` |
 | ③ 測試 | `GET /api/test/summary`、`GET /api/heldout/diff`、`GET/POST /api/images`、`GET /api/sources`、`POST /api/compare`、`POST /api/datasets/{id}/items`、`GET /api/train/{name}/orin.zip` |
 

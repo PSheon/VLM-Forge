@@ -295,3 +295,62 @@ def test_remove_images_takes_their_questions_and_owned_files(client, tmp_path):
     assert client.get(f"/api/datasets/{other['id']}").json()["images"] == 1
     assert client.get(f"/api/queues/{q['id']}").json()["unfinished"]["images"] == 0
     assert {c["image_id"] for c in client.get(f"/api/datasets/{ds['id']}/grid").json()} == {up[2]}
+
+
+def test_relabel_keeps_human_answers_and_asks_the_rest_again(client):
+    """Relabelling replaces machine questions with ones from the current settings; a question a
+    human saved stays and is not asked twice; the old batch does not turn 「中斷」."""
+    ds = client.post("/api/datasets", json={"name": "re", "config": {"probes": []}}).json()
+    for c in ("red", "green"):
+        client.post(
+            f"/api/datasets/{ds['id']}/upload", files={"file": (f"{c}.png", png(c), "image/png")}
+        )
+    old = wait(client, client.post(f"/api/datasets/{ds['id']}/label").json()["id"])
+    items = client.get(f"/api/datasets/{ds['id']}/grid").json()
+    img = items[0]["image_id"]
+    rev = client.get("/api/review/image/" + img).json()["items"]
+    human = next(it for it in rev if it["skill"] == "query")
+    client.post(
+        f"/api/items/{human['id']}/review",
+        json={"action": "correct", "reviewer": "P", "label": {"text": "7"}},
+    )
+    before = client.get(f"/api/datasets/{ds['id']}").json()["items"]
+    # the settings change: a probe object is now asked on every image
+    client.post(f"/api/datasets/{ds['id']}", json={"config": {"probes": ["forklift"]}})
+    r = client.post(f"/api/datasets/{ds['id']}/relabel", json={"image_ids": [img]}).json()
+    assert r["reset"] == {"dropped": len(rev) - 1, "kept": 1}
+    wait(client, r["id"])
+    after = client.get("/api/review/image/" + img).json()["items"]
+    keys = [(it["skill"], it["prompt"]) for it in after]
+    assert len(keys) == len(set(keys))  # nothing asked twice
+    assert ("detect", "forklift") in keys  # the new setting applies
+    kept = next(it for it in after if it["id"] == human["id"])
+    assert kept["label"] == {"text": "7"} and kept["status"] == "corrected"
+    assert client.get(f"/api/datasets/{ds['id']}").json()["items"] == before + 1
+    assert client.get(f"/api/queues/{old['id']}").json()["unfinished"]["images"] == 0
+
+
+def test_add_a_question_while_reviewing(client):
+    ds = client.post("/api/datasets", json={"name": "add"}).json()
+    img = client.post(
+        f"/api/datasets/{ds['id']}/upload", files={"file": ("a.png", png("red"), "image/png")}
+    ).json()["image_ids"][0]
+    body = {"image_id": img, "skill": "detect", "prompt": " forklift ", "reviewer": "P"}
+    it = client.post(f"/api/datasets/{ds['id']}/items", json={**body, "action": "pending"}).json()
+    assert it["status"] == "pending" and it["prompt"] == "forklift" and it["label"] is None
+    nxt = client.get("/api/review/next-image", params={"reviewer": "P", "dataset_id": ds["id"]})
+    assert [i["id"] for i in nxt.json()["items"]] == [it["id"]]
+    bad = client.post(f"/api/datasets/{ds['id']}/items", json={**body, "prompt": " "})
+    assert bad.status_code == 422
+    assert client.get(f"/api/datasets/{ds['id']}").json()["batches"] == []  # not a 「上一輪」
+    # a new dataset with the same name must not inherit the deleted one's hand-made queue
+    client.delete(f"/api/datasets/{ds['id']}")
+    ds2 = client.post("/api/datasets", json={"name": "add"}).json()
+    img2 = client.post(
+        f"/api/datasets/{ds2['id']}/upload", files={"file": ("b.png", png("blue"), "image/png")}
+    ).json()["image_ids"][0]
+    client.post(
+        f"/api/datasets/{ds2['id']}/items",
+        json={**body, "image_id": img2, "action": "pending"},
+    )
+    assert client.get(f"/api/datasets/{ds2['id']}").json()["items"] == 1

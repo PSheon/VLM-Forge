@@ -228,6 +228,8 @@ input.count { width: 110px; font-size: 24px; text-align: center; font-family: va
 .qlist { max-height: calc(100vh - 400px); min-height: 120px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
 .qlist .it { display: flex; gap: 7px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .qlist .it:last-child { border-bottom: none; }
+.qlist .add-q { width: 100%; justify-content: flex-start; padding: 4px 8px; border: none; border-bottom: 1px solid var(--line); border-radius: 0; font-size: 12px; color: var(--muted); }
+.qlist .add-q:hover { color: var(--fg); }
 .qlist .it.cur { background: var(--sel-bg); box-shadow: inset 3px 0 0 var(--sel-line); }
 .qlist .it.done { opacity: .55; }
 .qlist .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

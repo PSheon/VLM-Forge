@@ -215,17 +215,7 @@ class DatasetStore:
                     f"delete from items where image_id in ({marks}) and queue_id in ({qm})",
                     (*ids, *qids),
                 ).rowcount
-                for qid, cfg in self.db.execute(
-                    f"select id, config from queues where id in ({qm}) and config is not null",
-                    qids,
-                ).fetchall():
-                    c = json.loads(cfg)
-                    if "image_ids" in c:
-                        c["image_ids"] = [i for i in c["image_ids"] if i not in set(ids)]
-                        self.db.execute(
-                            "update queues set config = ? where id = ?",
-                            (json.dumps(c, ensure_ascii=False), qid),
-                        )
+                self._drop_from_batches(qids, ids)
             removed = self.db.execute(
                 f"delete from dataset_images where dataset_id = ? and image_id in ({marks})",
                 (ds_id, *ids),
@@ -251,6 +241,56 @@ class DatasetStore:
             self.db.execute("update datasets set updated_at = ? where id = ?", (now(), ds_id))
             self.db.commit()
         return {"removed": removed, "items": n_items, "files": files}
+
+    def _drop_from_batches(self, qids: list[int], image_ids: list[str]) -> None:
+        """Forget images in these batches' configs, so an old batch neither counts them as
+        unfinished nor asks them again on 「接著跑」 (caller holds the lock)."""
+        drop = set(image_ids)
+        qm = ",".join("?" * len(qids))
+        for qid, cfg in self.db.execute(
+            f"select id, config from queues where id in ({qm}) and config is not null", qids
+        ).fetchall():
+            c = json.loads(cfg)
+            if drop & set(c.get("image_ids", [])):
+                c["image_ids"] = [i for i in c["image_ids"] if i not in drop]
+                self.db.execute(
+                    "update queues set config = ? where id = ?",
+                    (json.dumps(c, ensure_ascii=False), qid),
+                )
+
+    def reset_for_relabel(self, ds_id: int, image_ids: list[str]) -> dict:
+        """Before asking these images again with the current teacher settings: their machine
+        questions (自動通過 / 待看) in this dataset go; what a human saved, discarded or added by
+        hand stays and is not asked twice (see ``asked``)."""
+        self.get(ds_id)
+        ids = sorted(set(image_ids))
+        with self.ws.lock:
+            qids = [
+                r[0]
+                for r in self.db.execute("select id from queues where dataset_id = ?", (ds_id,))
+            ]
+            if not ids or not qids:
+                return {"dropped": 0, "kept": 0}
+            marks, qm = ",".join("?" * len(ids)), ",".join("?" * len(qids))
+            where = f"image_id in ({marks}) and queue_id in ({qm})"
+            dropped = self.db.execute(
+                f"delete from items where {where} and status in ('pending', 'auto')"
+                " and origin != 'workbench'",
+                (*ids, *qids),
+            ).rowcount
+            kept = self.db.execute(f"select count(*) from items where {where}", (*ids, *qids))
+            self._drop_from_batches(qids, ids)
+            self.db.commit()
+        return {"dropped": dropped, "kept": kept.fetchone()[0]}
+
+    def asked(self, ds_id: int, image_id: str) -> set[tuple[str, str]]:
+        """(skill, prompt) pairs this image already has in the dataset."""
+        rows = self.db.execute(
+            "select items.skill, items.prompt from items join queues on queues.id = items.queue_id"
+            " where queues.dataset_id = ? and items.image_id = ?",
+            (ds_id, image_id),
+        ).fetchall()
+        return {(r[0], r[1]) for r in rows}
 
     def unlabelled_image_ids(self, ds_id: int) -> list[str]:
         """Images of the dataset that no batch has produced items for yet."""
