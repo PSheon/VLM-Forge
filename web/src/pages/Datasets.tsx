@@ -200,7 +200,11 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
   };
   const doRemove = async () => {
     setAskRemove(false); setBusy(true);
-    try { const r = await api.removeImages(d.id, [...picked]); setPicked(new Set()); say(`移除了 ${r.removed} 張（${r.items} 題）`, "warn"); reload(); load(); } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
+    try {
+      const r = await api.removeImages(d.id, [...picked]); setPicked(new Set()); reload(); load();
+      const undo = r.trash_id === null ? undefined : { label: "復原", run: async () => { try { const b = await api.restoreImages(d.id, r.trash_id!); say(`復原了 ${b.restored} 張（${b.items} 題）`, "ok"); reload(); load(); } catch (e) { say(String(e), "bad"); } } };
+      say(`移除了 ${r.removed} 張（${r.items} 題）`, "warn", { action: undo, ms: 8000 });
+    } catch (e) { say(String(e), "bad", { sticky: true }); } finally { setBusy(false); }
   };
   const doDelete = async () => { await api.deleteDataset(d.id); say(`刪了 ${d.name}`, "warn"); setAskDelete(false); onDeleted(); };
   const freeGb = status?.engine.gpu_free_gb ?? null;
@@ -318,7 +322,7 @@ function Detail({ d, status, reload, go, reviewer, setGuard, onBack, onDeleted }
       {tab === "review" && <Review spotOnly={spotOnly} setSpotOnly={setSpotOnly} reviewer={reviewer} datasetId={d.id} openImage={openImage} onOpened={() => setOpenImage(null)} refresh={() => { reload(); load(); }} go={go} setGuard={setGuard} header={header} onExit={() => setTab("images")} />}
       </Fade>
       <ConfirmDialog open={askRelabel} title={`重新標註 ${picked.size} 張？`} body={<>用<b>目前的 AI 導師設定</b>（{modeText}{probeList.length && mode !== "fixed" ? `、每張圖都問 ${probeList.join("／")}` : ""}）重出這些圖的題。自動通過與待看的 {pickedMachine} 題換掉；你看過、改過、丟棄或自己加的題保留，也不會重複出。約 20 秒/張。</>} confirmText={`重新標註 ${picked.size} 張`} onCancel={() => setAskRelabel(false)} onConfirm={doRelabel} />
-      <ConfirmDialog open={askRemove} title={`從 ${d.name} 移除 ${picked.size} 張？`} body={<>這些圖{pickedQ ? <>和它們的 <b>{pickedQ} 題</b>（已確認 {pickedDone} 題）</> : ""}會從資料集拿掉，之後訓練不會用到，不能復原。上傳的原檔沒有別的資料集在用就一起刪；GB300 資料夾裡的原檔不動。</>} confirmText={`移除 ${picked.size} 張`} danger onCancel={() => setAskRemove(false)} onConfirm={doRemove} />
+      <ConfirmDialog open={askRemove} title={`從 ${d.name} 移除 ${picked.size} 張？`} body={<>這些圖{pickedQ ? <>和它們的 <b>{pickedQ} 題</b>（已確認 {pickedDone} 題）</> : ""}會從資料集拿掉，之後訓練不會用到。移除後的提示可以「復原」；7 天後上傳的原檔（沒有別的資料集在用時）才真的刪掉，GB300 資料夾裡的原檔不動。</>} confirmText={`移除 ${picked.size} 張`} danger onCancel={() => setAskRemove(false)} onConfirm={doRemove} />
       <ConfirmDialog open={askDelete} title={`刪除 ${d.name}？`} body="只刪資料集與歸屬；圖和題留在工作區。" confirmText="刪除" typed={d.name} danger onCancel={() => setAskDelete(false)} onConfirm={doDelete} />
     </div>
   );

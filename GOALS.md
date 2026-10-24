@@ -76,7 +76,7 @@ Data Core 匯出包、GCS、`stage` 分支與 gate 儀式、PRO 6000 kestrel par
 ## 10. 現況（2026-10-24）
 
 - ①→③ 全程在 UI 跑通（工廠-測試 120 張 → 2845 題 → 檢查 → 訓練 → 分數／看差異／試一張／Orin 包）；版本內容見 `CHANGELOG.md`。
-- 資料庫每天自動備份一份到 `workspace/backups/`（留 7 份；圖檔不在備份裡）。
+- 資料庫每天自動備份一份到 `workspace/backups/`（留 7 份；圖檔不在備份裡）。從資料集移除的圖 7 天內可復原，之後才刪檔。
 - 標註批次的進度只在記憶體：server 重啟或取消會中斷，但出好的題都在，資料集頁給「接著跑」。**跑標註或訓練時不要重啟 server。**
 - 下一步：Paul 看完 ≥ 30 題抽查 → 用確認過的題訓第一個正式 run，看 CCTV detect／query 是否 ≥ base（v1 完成點）；Orin 實機驗證 `local_adapter.py`。
 - 待 Paul：NVR RTSP 連線資訊（工廠 CCTV 新畫面）。

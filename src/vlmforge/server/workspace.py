@@ -122,6 +122,7 @@ class Workspace:
                 self.db.execute(f"alter table {table} add column {col} {typ}")
         self.db.commit()
         self.lock = threading.Lock()
+        self.daily: list = []  # chores run with the backup check (e.g. DatasetStore.purge)
 
     @property
     def db(self) -> sqlite3.Connection:
@@ -165,14 +166,16 @@ class Workspace:
         }
 
     def start_backups(self, every_s: int = 3600) -> None:
-        """Back up now and check hourly (one copy per day) on a daemon thread."""
+        """Back up now and check hourly (one copy per day) on a daemon thread; ``daily``
+        chores run with each check."""
 
         def loop():
             while True:
-                try:
-                    self.backup()
-                except Exception as e:  # noqa: BLE001 - a failed backup must not stop the server
-                    print(f"backup failed: {e}", flush=True)
+                for job in (self.backup, *self.daily):
+                    try:
+                        job()
+                    except Exception as e:  # noqa: BLE001 - a failed chore must not stop the server
+                        print(f"{getattr(job, '__name__', job)} failed: {e}", flush=True)
                 time.sleep(every_s)
 
         threading.Thread(target=loop, daemon=True, name="backups").start()

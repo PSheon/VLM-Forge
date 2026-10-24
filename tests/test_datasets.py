@@ -288,9 +288,23 @@ def test_remove_images_takes_their_questions_and_owned_files(client, tmp_path):
     r = client.post(
         f"/api/datasets/{ds['id']}/images/remove", json={"image_ids": [red, green, fid]}
     ).json()
-    assert r == {"removed": 3, "items": 3 * per_image, "files": 1}  # green is in "other"
+    assert r["removed"] == 3 and r["items"] == 3 * per_image
     after = client.get(f"/api/datasets/{ds['id']}").json()
     assert after["images"] == 1 and after["items"] == per_image
+    # 復原 brings back the images and their questions
+    back = client.post(
+        f"/api/datasets/{ds['id']}/images/restore", params={"trash_id": r["trash_id"]}
+    ).json()
+    assert back == {"restored": 3, "items": 3 * per_image}
+    assert client.get(f"/api/datasets/{ds['id']}").json()["items"] == before["items"]
+    r = client.post(
+        f"/api/datasets/{ds['id']}/images/remove", json={"image_ids": [red, green, fid]}
+    ).json()
+    from vlmforge.server.datasets import DatasetStore
+
+    store = DatasetStore(client.ws)
+    assert store.purge(days=7) == 0 and Path(red_path).exists()  # still restorable
+    assert store.purge(days=0) == 1  # red's file goes; green is in "other"; folder files stay
     assert not Path(red_path).exists() and (folder / "f.png").exists()
     assert client.get(f"/api/datasets/{other['id']}").json()["images"] == 1
     assert client.get(f"/api/queues/{q['id']}").json()["unfinished"]["images"] == 0

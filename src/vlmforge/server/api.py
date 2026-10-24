@@ -417,6 +417,7 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
 
     # ------------------------------------------------------------------ datasets (GOALS §4)
     store = DatasetStore(ws)
+    ws.daily.append(store.purge)  # removed images' files go after datasets.TRASH_DAYS
 
     @app.get("/api/datasets")
     def datasets():
@@ -488,6 +489,14 @@ def create_app(ws: Workspace, engine, web_dist: Path | None = None) -> FastAPI:
             return store.add_folder(ds_id, d, body.limit, every_s=body.every)
         except KeyError as e:
             raise HTTPException(404, "沒有這個資料集") from e
+
+    @app.post("/api/datasets/{ds_id}/images/restore")
+    def dataset_restore_images(ds_id: int, trash_id: int):
+        """Undo a removal (the toast's 復原), within datasets.TRASH_DAYS."""
+        try:
+            return store.restore(ds_id, trash_id)
+        except KeyError as e:
+            raise HTTPException(404, "已經不能復原（超過 7 天或已復原）") from e
 
     @app.get("/api/datasets/{ds_id}/duplicates")
     def dataset_duplicates(ds_id: int):

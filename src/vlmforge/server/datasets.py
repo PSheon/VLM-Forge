@@ -22,6 +22,7 @@ import hashlib
 import io
 import json
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,7 @@ from .workspace import IMAGE_EXT, Workspace, item_row, now, sha256_file, signatu
 VAL_FRACTION = 0.1
 VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".ts", ".webm", ".gif"}
 VIDEO_EVERY_S = 5.0
+TRASH_DAYS = 7  # removed images can be restored this long; then their files go
 # Near-duplicate: the 99th-percentile pixel difference of two 64x36 RGB signatures.
 # Calibrated on the factory CCTV frames (2026-10-24): <= 18 was the same empty scene hours
 # apart, 20 a moved box, 29 a ladder that appeared. 12 only drops frames where nothing moved.
@@ -46,6 +48,12 @@ create table if not exists datasets (
     updated_at text not null,
     config text not null default '{}',
     note text not null default ''
+);
+create table if not exists trash (    -- removed images, restorable for TRASH_DAYS
+    id integer primary key,
+    dataset_id integer not null,
+    created_at text not null,
+    payload text not null           -- json: dataset_images rows, items rows, batch image ids
 );
 create table if not exists dataset_images (
     dataset_id integer not null references datasets(id),
@@ -238,51 +246,118 @@ class DatasetStore:
     def remove_images(self, ds_id: int, image_ids: list[str]) -> dict:
         """Takes images out of the dataset together with their questions in it (reviewed or
         not), and drops them from its batches' configs so 「接著跑」 does not ask them again.
-        A file this workspace stored (upload / zip) is deleted once nothing else uses it; a
-        file in a GB300 folder is never touched."""
+        What was removed goes to ``trash`` for ``TRASH_DAYS`` (``restore`` puts it back);
+        ``purge`` then deletes the files this workspace stored once nothing uses them. A file
+        in a GB300 folder is never touched."""
         self.get(ds_id)
         ids = sorted(set(image_ids))
         if not ids:
-            return {"removed": 0, "items": 0, "files": 0}
+            return {"removed": 0, "items": 0, "trash_id": None}
         marks = ",".join("?" * len(ids))
         with self.ws.lock:
             qids = [
                 r[0]
                 for r in self.db.execute("select id from queues where dataset_id = ?", (ds_id,))
             ]
-            n_items = 0
+            members = [
+                dict(r)
+                for r in self.db.execute(
+                    f"select * from dataset_images where dataset_id = ? and image_id in ({marks})",
+                    (ds_id, *ids),
+                )
+            ]
+            items, batches = [], {}
             if qids:
                 qm = ",".join("?" * len(qids))
-                n_items = self.db.execute(
-                    f"delete from items where image_id in ({marks}) and queue_id in ({qm})",
-                    (*ids, *qids),
-                ).rowcount
+                where = f"image_id in ({marks}) and queue_id in ({qm})"
+                items = [
+                    dict(r)
+                    for r in self.db.execute(f"select * from items where {where}", (*ids, *qids))
+                ]
+                self.db.execute(f"delete from items where {where}", (*ids, *qids))
+                for qid, cfg in self.db.execute(
+                    f"select id, config from queues where id in ({qm}) and config is not null", qids
+                ).fetchall():
+                    gone = [i for i in json.loads(cfg).get("image_ids", []) if i in set(ids)]
+                    if gone:
+                        batches[str(qid)] = gone
                 self._drop_from_batches(qids, ids)
-            removed = self.db.execute(
+            self.db.execute(
                 f"delete from dataset_images where dataset_id = ? and image_id in ({marks})",
                 (ds_id, *ids),
-            ).rowcount
-            # files this workspace owns and nothing references any more
-            orphans = self.db.execute(
-                f"select id, path from images where id in ({marks})"
-                " and id not in (select image_id from dataset_images)"
-                " and id not in (select image_id from items)",
-                ids,
-            ).fetchall()
-            files = 0
-            root = self.ws.images_dir.resolve()
-            for r in orphans:
-                path = Path(r["path"])
-                if path.resolve().parent != root:
-                    continue  # a folder on this machine: not ours to delete
-                path.unlink(missing_ok=True)
-                for c in (self.ws.root / "cache").glob(f"{r['id']}-w*.jpg"):
-                    c.unlink(missing_ok=True)
-                self.db.execute("delete from images where id = ?", (r["id"],))
-                files += 1
+            )
+            payload = {"images": members, "items": items, "batches": batches}
+            trash_id = self.db.execute(
+                "insert into trash (dataset_id, created_at, payload) values (?, ?, ?)",
+                (ds_id, now(), json.dumps(payload, ensure_ascii=False)),
+            ).lastrowid
             self.db.execute("update datasets set updated_at = ? where id = ?", (now(), ds_id))
             self.db.commit()
-        return {"removed": removed, "items": n_items, "files": files}
+        return {"removed": len(members), "items": len(items), "trash_id": trash_id}
+
+    def restore(self, ds_id: int, trash_id: int) -> dict:
+        """Undo one ``remove_images``: the images, their questions (same ids, labels and
+        reviews) and their place in the batches come back."""
+        with self.ws.lock:
+            row = self.db.execute(
+                "select payload from trash where id = ? and dataset_id = ?", (trash_id, ds_id)
+            ).fetchone()
+            if row is None:
+                raise KeyError("nothing to restore")
+            p = json.loads(row[0])
+            for table, rows in (("dataset_images", p["images"]), ("items", p["items"])):
+                for r in rows:
+                    cols = ",".join(r)
+                    self.db.execute(
+                        f"insert or ignore into {table} ({cols}) values ({','.join('?' * len(r))})",
+                        list(r.values()),
+                    )
+            for qid, back in p["batches"].items():
+                cfg = self.db.execute(
+                    "select config from queues where id = ?", (int(qid),)
+                ).fetchone()
+                if cfg and cfg[0]:
+                    c = json.loads(cfg[0])
+                    c["image_ids"] = c.get("image_ids", []) + [
+                        i for i in back if i not in c.get("image_ids", [])
+                    ]
+                    self.db.execute(
+                        "update queues set config = ? where id = ?",
+                        (json.dumps(c, ensure_ascii=False), int(qid)),
+                    )
+            self.db.execute("delete from trash where id = ?", (trash_id,))
+            self.db.execute("update datasets set updated_at = ? where id = ?", (now(), ds_id))
+            self.db.commit()
+        return {"restored": len(p["images"]), "items": len(p["items"])}
+
+    def purge(self, days: float = TRASH_DAYS) -> int:
+        """Forget removals older than ``days`` and delete the files this workspace stored for
+        them once nothing references them (uploads / video frames; never a GB300 folder)."""
+        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
+        files = 0
+        with self.ws.lock:
+            old = self.db.execute("select id, payload from trash where created_at <= ?", (cutoff,))
+            old = old.fetchall()
+            ids = {r["image_id"] for t in old for r in json.loads(t[1])["images"]}
+            root = self.ws.images_dir.resolve()
+            for i in sorted(ids):
+                busy = self.db.execute(
+                    "select (select count(*) from dataset_images where image_id = ?)"
+                    " + (select count(*) from items where image_id = ?)",
+                    (i, i),
+                ).fetchone()[0]
+                row = self.db.execute("select path from images where id = ?", (i,)).fetchone()
+                if busy or row is None or Path(row[0]).resolve().parent != root:
+                    continue
+                Path(row[0]).unlink(missing_ok=True)
+                for c in (self.ws.root / "cache").glob(f"{i}-w*.jpg"):
+                    c.unlink(missing_ok=True)
+                self.db.execute("delete from images where id = ?", (i,))
+                self.db.execute("delete from image_sigs where image_id = ?", (i,))
+                files += 1
+            self.db.executemany("delete from trash where id = ?", [(t[0],) for t in old])
+            self.db.commit()
+        return files
 
     def _drop_from_batches(self, qids: list[int], image_ids: list[str]) -> None:
         """Forget images in these batches' configs, so an old batch neither counts them as
